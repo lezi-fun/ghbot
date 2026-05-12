@@ -7,7 +7,11 @@ const configSchema = z.object({
   githubAppId: z.coerce.number().int().positive(),
   githubPrivateKey: z.string().min(1).transform((value) => value.replace(/\\n/g, "\n")),
   openAiApiKey: z.string().min(1),
+  openAiBaseUrl: z.string().url().optional(),
   openAiModel: z.string().min(1).default("gpt-4.1"),
+  openAiReasoningEffort: z.enum(["default", "low", "medium", "high"]).optional().transform((value) => {
+    return value === "default" ? undefined : value;
+  }),
   botName: z.string().min(1).default("ghbot"),
   lenientApprovalUser: z.string().min(1).default("lezi-fun"),
   autoMerge: z.coerce.boolean().default(false),
@@ -22,7 +26,9 @@ export const config = configSchema.parse({
   githubAppId: process.env.GITHUB_APP_ID,
   githubPrivateKey: process.env.GITHUB_PRIVATE_KEY,
   openAiApiKey: process.env.OPENAI_API_KEY,
+  openAiBaseUrl: process.env.OPENAI_BASE_URL,
   openAiModel: process.env.OPENAI_MODEL,
+  openAiReasoningEffort: process.env.OPENAI_REASONING_EFFORT,
   botName: process.env.BOT_NAME,
   lenientApprovalUser: process.env.LENIENT_APPROVAL_USER,
   autoMerge: process.env.AUTO_MERGE,

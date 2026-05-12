@@ -20,7 +20,10 @@ const reviewDecisionSchema = z.object({
 });
 
 export class OpenAiReviewer {
-  private readonly client = new OpenAI({ apiKey: config.openAiApiKey });
+  private readonly client = new OpenAI({
+    apiKey: config.openAiApiKey,
+    baseURL: config.openAiBaseUrl
+  });
 
   async review(input: {
     title: string;
@@ -28,13 +31,14 @@ export class OpenAiReviewer {
     files: PullRequestFile[];
     mode: ReviewMode;
   }): Promise<ReviewDecision> {
-    const response = await this.client.chat.completions.create({
+    const response = await this.client.responses.create({
       model: config.openAiModel,
       temperature: 0.1,
-      response_format: {
-        type: "json_schema",
-        json_schema: {
+      ...(config.openAiReasoningEffort ? { reasoning: { effort: config.openAiReasoningEffort } } : {}),
+      text: {
+        format: {
           name: "pull_request_review",
+          type: "json_schema",
           strict: true,
           schema: {
             type: "object",
@@ -64,11 +68,8 @@ export class OpenAiReviewer {
           }
         }
       },
-      messages: [
-        {
-          role: "system",
-          content: buildSystemPrompt(input.mode)
-        },
+      instructions: buildSystemPrompt(input.mode),
+      input: [
         {
           role: "user",
           content: JSON.stringify({
@@ -88,7 +89,7 @@ export class OpenAiReviewer {
       ]
     });
 
-    const raw = response.choices[0]?.message.content;
+    const raw = response.output_text;
     if (!raw) {
       throw new Error("OpenAI returned an empty review response.");
     }

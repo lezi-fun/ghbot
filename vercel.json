@@ -1,13 +1,30 @@
 {
-  "functions": {
-    "api/github/webhooks.ts": {
-      "maxDuration": 60
-    }
-  },
-  "rewrites": [
+  "version": 2,
+  "builds": [
     {
-      "source": "/webhooks/github",
-      "destination": "/api/github/webhooks"
+      "src": "api/github/webhooks.ts",
+      "use": "@vercel/node",
+      "config": {
+        "maxDuration": 60
+      }
+    }
+  ],
+  "routes": [
+    {
+      "src": "^/$",
+      "dest": "/api/github/webhooks.ts"
+    },
+    {
+      "src": "^/api/github/webhooks$",
+      "dest": "/api/github/webhooks.ts"
+    },
+    {
+      "src": "^/webhooks/github$",
+      "dest": "/api/github/webhooks.ts"
+    },
+    {
+      "src": "^/(.*)$",
+      "status": 404
     }
   ]
 }

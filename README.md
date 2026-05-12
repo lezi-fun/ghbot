@@ -56,10 +56,12 @@ Required variables:
 - `GITHUB_APP_ID`: GitHub App ID.
 - `GITHUB_PRIVATE_KEY`: GitHub App private key. Use escaped `\n` line breaks in a single-line env var.
 - `OPENAI_API_KEY`: API key for the reviewer model.
+- `OPENAI_BASE_URL`: optional OpenAI-compatible API base URL.
 
 Important optional variables:
 
 - `OPENAI_MODEL`: defaults to `gpt-4.1`.
+- `OPENAI_REASONING_EFFORT`: optional reasoning effort, one of `low`, `medium`, or `high`. Use `default` or leave unset to omit the parameter.
 - `AUTO_MERGE`: defaults to `false`. Set to `true` only after testing on a non-critical repo.
 - `MERGE_METHOD`: `merge`, `squash`, or `rebase`. Defaults to `squash`.
 - `REQUIRE_CHECKS`: defaults to `true`.

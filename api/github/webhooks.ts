@@ -1,6 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { waitUntil } from "@vercel/functions";
-import { createGitHubWebhooks } from "../../src/github/webhookHandler.js";
 import { logger } from "../../src/logger.js";
 
 export const config = {
@@ -8,8 +7,6 @@ export const config = {
     bodyParser: false
   }
 };
-
-const webhooks = createGitHubWebhooks();
 
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   if (request.method === "GET") {
@@ -35,6 +32,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const payload = await readRawBody(request);
 
   try {
+    const { createGitHubWebhooks } = await import("../../src/github/webhookHandler.js");
+    const webhooks = createGitHubWebhooks();
     const verified = await webhooks.verify(payload, signature);
     if (!verified) {
       response.status(401).json({ error: "Invalid webhook signature." });
