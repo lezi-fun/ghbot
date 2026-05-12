@@ -1,0 +1,34 @@
+export type PullRequestRef = {
+  owner: string;
+  repo: string;
+  pullNumber: number;
+  installationId: number;
+};
+
+export type PullRequestFile = {
+  filename: string;
+  patch?: string;
+  status: string;
+  additions: number;
+  deletions: number;
+};
+
+export type ReviewFinding = {
+  path: string;
+  line: number;
+  severity: "blocking" | "suggestion";
+  title: string;
+  body: string;
+};
+
+export type ReviewDecision = {
+  safeToMerge: boolean;
+  summary: string;
+  findings: ReviewFinding[];
+};
+
+export type DiffPosition = {
+  path: string;
+  line: number;
+  side: "RIGHT";
+};

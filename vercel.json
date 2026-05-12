@@ -1,0 +1,13 @@
+{
+  "functions": {
+    "api/github/webhooks.ts": {
+      "maxDuration": 60
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/webhooks/github",
+      "destination": "/api/github/webhooks"
+    }
+  ]
+}
