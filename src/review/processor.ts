@@ -59,14 +59,114 @@ export async function processPullRequest(octokit: Octokit, ref: PullRequestRef, 
     mode
   });
 
+  if (decision.shouldClosePullRequest) {
+    await closeMaliciousPullRequest(octokit, {
+      owner,
+      repo,
+      pullNumber,
+      reason: decision.closeReason || "The automated review found clearly malicious code."
+    });
+    logger.warn({ owner, repo, pullNumber }, "Closed pull request because malicious code was detected.");
+    return;
+  }
+
   if (!decision.safeToMerge) {
     logger.info({ owner, repo, pullNumber }, "Review requested changes; not merging.");
     return;
   }
 
+  await maybeMergePullRequest(octokit, {
+    owner,
+    repo,
+    pullNumber,
+    title: pullRequest.title,
+    headSha: pullRequest.head.sha,
+    mode
+  });
+}
+
+export async function processPullRequestReviewApproval(
+  octokit: Octokit,
+  params: {
+    owner: string;
+    repo: string;
+    pullNumber: number;
+    reviewerLogin: string;
+    state: string;
+    commitId: string;
+  }
+): Promise<void> {
+  if (params.state !== "approved" || params.reviewerLogin !== config.lenientApprovalUser) {
+    return;
+  }
+
+  const { data: pullRequest } = await octokit.rest.pulls.get({
+    owner: params.owner,
+    repo: params.repo,
+    pull_number: params.pullNumber
+  });
+
+  if (pullRequest.head.sha !== params.commitId) {
+    logger.info(
+      {
+        owner: params.owner,
+        repo: params.repo,
+        pullNumber: params.pullNumber,
+        approvedCommit: params.commitId,
+        currentHead: pullRequest.head.sha
+      },
+      "Ignoring approval because it does not match the current PR head."
+    );
+    return;
+  }
+
+  await maybeMergePullRequest(octokit, {
+    owner: params.owner,
+    repo: params.repo,
+    pullNumber: params.pullNumber,
+    title: pullRequest.title,
+    headSha: pullRequest.head.sha,
+    mode: "lenient"
+  });
+}
+
+async function maybeMergePullRequest(
+  octokit: Octokit,
+  params: {
+    owner: string;
+    repo: string;
+    pullNumber: number;
+    title: string;
+    headSha: string;
+    mode: ReviewMode;
+  }
+): Promise<void> {
+  const { owner, repo, pullNumber } = params;
+
   if (!config.autoMerge) {
     logger.info({ owner, repo, pullNumber }, "AUTO_MERGE is disabled; approved only.");
     return;
+  }
+
+  if (params.mode === "lenient") {
+    const approvedByOwner = await hasCurrentHeadApprovalFrom(octokit, {
+      owner,
+      repo,
+      pullNumber,
+      headSha: params.headSha,
+      reviewerLogin: config.lenientApprovalUser
+    });
+
+    if (!approvedByOwner) {
+      await octokit.rest.issues.createComment({
+        owner,
+        repo,
+        issue_number: pullNumber,
+        body: `Lenient check passed, but this PR will not be merged until @${config.lenientApprovalUser} approves the current head commit.`
+      });
+      logger.info({ owner, repo, pullNumber, reviewer: config.lenientApprovalUser }, "Waiting for lenient approval before merging.");
+      return;
+    }
   }
 
   const mergeablePullRequest = await waitForMergeable(octokit, owner, repo, pullNumber);
@@ -84,7 +184,7 @@ export async function processPullRequest(octokit: Octokit, ref: PullRequestRef, 
     const checks = await requiredChecksAreGreen(octokit, {
       owner,
       repo,
-      ref: pullRequest.head.sha
+      ref: params.headSha
     });
     if (!checks.ok) {
       await octokit.rest.issues.createComment({
@@ -102,7 +202,33 @@ export async function processPullRequest(octokit: Octokit, ref: PullRequestRef, 
     repo,
     pull_number: pullNumber,
     merge_method: config.mergeMethod,
-    commit_title: `${pullRequest.title} (#${pullNumber})`
+    commit_title: `${params.title} (#${pullNumber})`
+  });
+}
+
+async function hasCurrentHeadApprovalFrom(
+  octokit: Octokit,
+  params: {
+    owner: string;
+    repo: string;
+    pullNumber: number;
+    headSha: string;
+    reviewerLogin: string;
+  }
+): Promise<boolean> {
+  const reviews = await octokit.paginate(octokit.rest.pulls.listReviews, {
+    owner: params.owner,
+    repo: params.repo,
+    pull_number: params.pullNumber,
+    per_page: 100
+  });
+
+  return reviews.some((review) => {
+    return (
+      review.user?.login === params.reviewerLogin &&
+      review.state === "APPROVED" &&
+      review.commit_id === params.headSha
+    );
   });
 }
 
@@ -225,7 +351,8 @@ async function upsertReviewCheckRun(
   }
 ): Promise<void> {
   const hasBlockingFinding = params.decision.findings.some((finding) => finding.severity === "blocking");
-  const conclusion = params.decision.safeToMerge && !hasBlockingFinding ? "success" : "action_required";
+  const conclusion =
+    params.decision.shouldClosePullRequest || hasBlockingFinding || !params.decision.safeToMerge ? "action_required" : "success";
 
   await octokit.rest.checks.create({
     owner: params.owner,
@@ -235,8 +362,14 @@ async function upsertReviewCheckRun(
     status: "completed",
     conclusion,
     output: {
-      title: params.mode === "lenient" ? "Lenient review completed" : "Strict review completed",
-      summary: params.decision.summary
+      title: params.decision.shouldClosePullRequest
+        ? "Malicious code detected"
+        : params.mode === "lenient"
+          ? "Lenient review completed"
+          : "Strict review completed",
+      summary: params.decision.shouldClosePullRequest
+        ? `${params.decision.summary}\n\nClose reason: ${params.decision.closeReason}`
+        : params.decision.summary
     },
     actions:
       params.mode === "strict" && conclusion === "action_required"
@@ -253,6 +386,30 @@ async function upsertReviewCheckRun(
 
 export function isLenientCheckAction(identifier: string): boolean {
   return identifier === LENIENT_ACTION_IDENTIFIER;
+}
+
+async function closeMaliciousPullRequest(
+  octokit: Octokit,
+  params: {
+    owner: string;
+    repo: string;
+    pullNumber: number;
+    reason: string;
+  }
+): Promise<void> {
+  await octokit.rest.issues.createComment({
+    owner: params.owner,
+    repo: params.repo,
+    issue_number: params.pullNumber,
+    body: `This PR was automatically closed because the review detected clearly malicious code.\n\nReason: ${params.reason}`
+  });
+
+  await octokit.rest.pulls.update({
+    owner: params.owner,
+    repo: params.repo,
+    pull_number: params.pullNumber,
+    state: "closed"
+  });
 }
 
 async function waitForMergeable(

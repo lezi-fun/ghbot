@@ -12,6 +12,8 @@ GitHub App bot that reviews pull requests with an AI reviewer, leaves inline rev
   - `suggestion` findings are included as non-blocking suggestions.
 - Creates a GitHub check run with a `Lenient check` button when strict review requests changes.
 - When `Lenient check` is clicked, reviews again and only blocks dangerous changes, runtime-impacting issues, errors, crashes, broken builds, data-loss risks, and security risks.
+- A PR that passes `Lenient check` is not auto-merged until `@lezi-fun` approves the current head commit.
+- If the reviewer detects clearly malicious code, the bot comments with the reason and closes the pull request.
 - Posts inline comments only on valid added diff lines.
 - Approves clean pull requests.
 - If `AUTO_MERGE=true`, merges only after:
@@ -61,6 +63,7 @@ Important optional variables:
 - `AUTO_MERGE`: defaults to `false`. Set to `true` only after testing on a non-critical repo.
 - `MERGE_METHOD`: `merge`, `squash`, or `rebase`. Defaults to `squash`.
 - `REQUIRE_CHECKS`: defaults to `true`.
+- `LENIENT_APPROVAL_USER`: defaults to `lezi-fun`.
 - `MAX_PATCH_CHARS`: maximum patch payload sent to the reviewer. Defaults to `120000`.
 
 ## Local development

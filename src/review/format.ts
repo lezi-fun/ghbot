@@ -8,6 +8,9 @@ export function formatReviewBody(decision: ReviewDecision, unpostedFindings: Rev
     "",
     decision.summary,
     "",
+    ...(decision.shouldClosePullRequest
+      ? [`Close PR: yes`, "", `Close reason: ${decision.closeReason}`, ""]
+      : []),
     `Decision: ${decision.safeToMerge ? "safe to merge" : "changes requested"}`
   ];
 

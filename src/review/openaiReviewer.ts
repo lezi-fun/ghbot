@@ -5,6 +5,8 @@ import type { PullRequestFile, ReviewDecision, ReviewMode } from "../types.js";
 
 const reviewDecisionSchema = z.object({
   safeToMerge: z.boolean(),
+  shouldClosePullRequest: z.boolean(),
+  closeReason: z.string(),
   summary: z.string(),
   findings: z.array(
     z.object({
@@ -37,9 +39,11 @@ export class OpenAiReviewer {
           schema: {
             type: "object",
             additionalProperties: false,
-            required: ["safeToMerge", "summary", "findings"],
+            required: ["safeToMerge", "shouldClosePullRequest", "closeReason", "summary", "findings"],
             properties: {
               safeToMerge: { type: "boolean" },
+              shouldClosePullRequest: { type: "boolean" },
+              closeReason: { type: "string" },
               summary: { type: "string" },
               findings: {
                 type: "array",
@@ -97,6 +101,9 @@ function buildSystemPrompt(mode: ReviewMode): string {
   const commonRules = [
     "You are a senior software engineer reviewing a GitHub pull request.",
     "Only set safeToMerge=true when there are no blocking findings.",
+    "Set shouldClosePullRequest=true only for clearly malicious code: backdoors, credential theft, token exfiltration, destructive commands, malware, hidden persistence, privilege escalation, supply-chain compromise, or intentionally abusive behavior.",
+    "Do not set shouldClosePullRequest=true for ordinary bugs, crashes, failing tests, incomplete code, suspicious-but-unproven code, or low-quality changes.",
+    "When shouldClosePullRequest=true, explain the evidence in closeReason. Otherwise closeReason must be an empty string.",
     "For each finding, choose a line number that exists on an added line in the supplied patch whenever possible.",
     "Do not invent files, line numbers, test results, or runtime behavior."
   ];

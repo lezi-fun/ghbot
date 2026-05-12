@@ -2,7 +2,12 @@ import { Webhooks } from "@octokit/webhooks";
 import { config } from "../config.js";
 import { getInstallationOctokit } from "./app.js";
 import { logger } from "../logger.js";
-import { isLenientCheckAction, processLenientCheckRunAction, processPullRequest } from "../review/processor.js";
+import {
+  isLenientCheckAction,
+  processLenientCheckRunAction,
+  processPullRequest,
+  processPullRequestReviewApproval
+} from "../review/processor.js";
 
 export function createGitHubWebhooks(): Webhooks {
   const webhooks = new Webhooks({
@@ -44,6 +49,30 @@ export function createGitHubWebhooks(): Webhooks {
       owner: payload.repository.owner.login,
       repo: payload.repository.name,
       headSha: payload.check_run.head_sha
+    });
+  });
+
+  webhooks.on("pull_request_review.submitted", async ({ payload }) => {
+    const reviewerLogin = payload.review.user?.login;
+    if (!reviewerLogin) {
+      logger.warn({ repository: payload.repository.full_name, pullNumber: payload.pull_request.number }, "Skipping review without reviewer login.");
+      return;
+    }
+
+    const installationId = payload.installation?.id;
+    if (!installationId) {
+      logger.warn({ repository: payload.repository.full_name, pullNumber: payload.pull_request.number }, "Skipping review without installation id.");
+      return;
+    }
+
+    const octokit = await getInstallationOctokit(installationId);
+    await processPullRequestReviewApproval(octokit, {
+      owner: payload.repository.owner.login,
+      repo: payload.repository.name,
+      pullNumber: payload.pull_request.number,
+      reviewerLogin,
+      state: payload.review.state,
+      commitId: payload.review.commit_id
     });
   });
 

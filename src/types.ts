@@ -22,6 +22,8 @@ export type ReviewFinding = {
 
 export type ReviewDecision = {
   safeToMerge: boolean;
+  shouldClosePullRequest: boolean;
+  closeReason: string;
   summary: string;
   findings: ReviewFinding[];
 };
