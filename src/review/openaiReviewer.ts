@@ -1,4 +1,4 @@
-import OpenAI from "openai";
+import { OpenAI } from "openai";
 import { z } from "zod";
 import { config } from "../config.js";
 import type { PullRequestFile, ReviewDecision, ReviewMode } from "../types.js";
