@@ -1,8 +1,10 @@
-import type { ReviewDecision, ReviewFinding } from "../types.js";
+import type { ReviewDecision, ReviewFinding, ReviewMode } from "../types.js";
 
-export function formatReviewBody(decision: ReviewDecision, unpostedFindings: ReviewFinding[]): string {
+export function formatReviewBody(decision: ReviewDecision, unpostedFindings: ReviewFinding[], mode: ReviewMode): string {
   const lines = [
     `## Automated review`,
+    "",
+    `Mode: ${mode === "lenient" ? "lenient" : "strict"}`,
     "",
     decision.summary,
     "",

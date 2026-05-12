@@ -2,7 +2,6 @@ export type PullRequestRef = {
   owner: string;
   repo: string;
   pullNumber: number;
-  installationId: number;
 };
 
 export type PullRequestFile = {
@@ -26,6 +25,8 @@ export type ReviewDecision = {
   summary: string;
   findings: ReviewFinding[];
 };
+
+export type ReviewMode = "strict" | "lenient";
 
 export type DiffPosition = {
   path: string;

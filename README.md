@@ -10,6 +10,8 @@ GitHub App bot that reviews pull requests with an AI reviewer, leaves inline rev
   - `safeToMerge=true` only when there are no blocking findings.
   - `blocking` findings become request-changes reviews.
   - `suggestion` findings are included as non-blocking suggestions.
+- Creates a GitHub check run with a `Lenient check` button when strict review requests changes.
+- When `Lenient check` is clicked, reviews again and only blocks dangerous changes, runtime-impacting issues, errors, crashes, broken builds, data-loss risks, and security risks.
 - Posts inline comments only on valid added diff lines.
 - Approves clean pull requests.
 - If `AUTO_MERGE=true`, merges only after:
@@ -23,13 +25,14 @@ Create a GitHub App with these repository permissions:
 
 - Contents: `Read & write`
 - Pull requests: `Read & write`
-- Checks: `Read-only`
+- Checks: `Read & write`
 - Commit statuses: `Read-only`
 - Metadata: `Read-only`
 
 Subscribe to this webhook event:
 
 - Pull request
+- Check run
 
 Set the webhook URL to:
 

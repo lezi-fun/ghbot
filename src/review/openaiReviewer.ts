@@ -1,7 +1,7 @@
 import OpenAI from "openai";
 import { z } from "zod";
 import { config } from "../config.js";
-import type { PullRequestFile, ReviewDecision } from "../types.js";
+import type { PullRequestFile, ReviewDecision, ReviewMode } from "../types.js";
 
 const reviewDecisionSchema = z.object({
   safeToMerge: z.boolean(),
@@ -24,6 +24,7 @@ export class OpenAiReviewer {
     title: string;
     body: string | null;
     files: PullRequestFile[];
+    mode: ReviewMode;
   }): Promise<ReviewDecision> {
     const response = await this.client.chat.completions.create({
       model: config.openAiModel,
@@ -62,14 +63,7 @@ export class OpenAiReviewer {
       messages: [
         {
           role: "system",
-          content: [
-            "You are a strict senior software engineer reviewing a GitHub pull request.",
-            "Find correctness bugs, security issues, data-loss risks, broken tests, bad error handling, and maintainability problems.",
-            "Only set safeToMerge=true when there are no blocking findings.",
-            "Use suggestion severity for non-blocking style or clarity improvements.",
-            "For each finding, choose a line number that exists on an added line in the supplied patch whenever possible.",
-            "Do not invent files, line numbers, test results, or runtime behavior."
-          ].join(" ")
+          content: buildSystemPrompt(input.mode)
         },
         {
           role: "user",
@@ -97,4 +91,30 @@ export class OpenAiReviewer {
 
     return reviewDecisionSchema.parse(JSON.parse(raw));
   }
+}
+
+function buildSystemPrompt(mode: ReviewMode): string {
+  const commonRules = [
+    "You are a senior software engineer reviewing a GitHub pull request.",
+    "Only set safeToMerge=true when there are no blocking findings.",
+    "For each finding, choose a line number that exists on an added line in the supplied patch whenever possible.",
+    "Do not invent files, line numbers, test results, or runtime behavior."
+  ];
+
+  if (mode === "lenient") {
+    return [
+      ...commonRules,
+      "This is a lenient review requested by the pull request author.",
+      "Only report issues that are dangerous, affect runtime behavior, can cause errors, can crash, can break builds/tests, can lose data, or create clear security problems.",
+      "Do not block on style, naming, subjective maintainability, small refactors, missing comments, formatting, or non-dangerous best-practice preferences.",
+      "Use suggestion severity only when the issue is still runtime-relevant but not necessarily blocking."
+    ].join(" ");
+  }
+
+  return [
+    ...commonRules,
+    "This is a strict review.",
+    "Find correctness bugs, security issues, data-loss risks, broken tests, bad error handling, and maintainability problems.",
+    "Use suggestion severity for non-blocking style or clarity improvements."
+  ].join(" ");
 }

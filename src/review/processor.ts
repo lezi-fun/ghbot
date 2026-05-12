@@ -3,14 +3,16 @@ import { config } from "../config.js";
 import { requiredChecksAreGreen } from "../github/checks.js";
 import { collectValidNewLines, toDiffPosition } from "../github/diff.js";
 import { logger } from "../logger.js";
-import type { PullRequestFile, PullRequestRef, ReviewDecision, ReviewFinding } from "../types.js";
+import type { PullRequestFile, PullRequestRef, ReviewDecision, ReviewFinding, ReviewMode } from "../types.js";
 import { formatReviewBody } from "./format.js";
 import { OpenAiReviewer } from "./openaiReviewer.js";
 import { compactFilesForReview } from "./prompt.js";
 
 const reviewer = new OpenAiReviewer();
+const LENIENT_ACTION_IDENTIFIER = "lenient_check";
+const CHECK_RUN_NAME = "ghbot review";
 
-export async function processPullRequest(octokit: Octokit, ref: PullRequestRef): Promise<void> {
+export async function processPullRequest(octokit: Octokit, ref: PullRequestRef, mode: ReviewMode = "strict"): Promise<void> {
   const { owner, repo, pullNumber } = ref;
 
   const { data: pullRequest } = await octokit.rest.pulls.get({
@@ -34,7 +36,8 @@ export async function processPullRequest(octokit: Octokit, ref: PullRequestRef):
   const decision = await reviewer.review({
     title: pullRequest.title,
     body: pullRequest.body,
-    files: compactFiles
+    files: compactFiles,
+    mode
   });
 
   await submitReview(octokit, {
@@ -43,7 +46,17 @@ export async function processPullRequest(octokit: Octokit, ref: PullRequestRef):
     pullNumber,
     commitId: pullRequest.head.sha,
     files,
-    decision
+    decision,
+    mode
+  });
+
+  await upsertReviewCheckRun(octokit, {
+    owner,
+    repo,
+    headSha: pullRequest.head.sha,
+    pullNumber,
+    decision,
+    mode
   });
 
   if (!decision.safeToMerge) {
@@ -93,6 +106,37 @@ export async function processPullRequest(octokit: Octokit, ref: PullRequestRef):
   });
 }
 
+export async function processLenientCheckRunAction(
+  octokit: Octokit,
+  params: {
+    owner: string;
+    repo: string;
+    headSha: string;
+  }
+): Promise<void> {
+  const pulls = await octokit.rest.repos.listPullRequestsAssociatedWithCommit({
+    owner: params.owner,
+    repo: params.repo,
+    commit_sha: params.headSha
+  });
+
+  const pullRequest = pulls.data.find((pull) => pull.state === "open");
+  if (!pullRequest) {
+    logger.warn(params, "No open pull request found for lenient check action.");
+    return;
+  }
+
+  await processPullRequest(
+    octokit,
+    {
+      owner: params.owner,
+      repo: params.repo,
+      pullNumber: pullRequest.number
+    },
+    "lenient"
+  );
+}
+
 async function listPullRequestFiles(
   octokit: Octokit,
   owner: string,
@@ -124,6 +168,7 @@ async function submitReview(
     commitId: string;
     files: PullRequestFile[];
     decision: ReviewDecision;
+    mode: ReviewMode;
   }
 ): Promise<void> {
   const validLines = collectValidNewLines(params.files);
@@ -163,9 +208,51 @@ async function submitReview(
     pull_number: params.pullNumber,
     commit_id: params.commitId,
     event,
-    body: formatReviewBody(params.decision, unpostedFindings),
+    body: formatReviewBody(params.decision, unpostedFindings, params.mode),
     comments
   });
+}
+
+async function upsertReviewCheckRun(
+  octokit: Octokit,
+  params: {
+    owner: string;
+    repo: string;
+    headSha: string;
+    pullNumber: number;
+    decision: ReviewDecision;
+    mode: ReviewMode;
+  }
+): Promise<void> {
+  const hasBlockingFinding = params.decision.findings.some((finding) => finding.severity === "blocking");
+  const conclusion = params.decision.safeToMerge && !hasBlockingFinding ? "success" : "action_required";
+
+  await octokit.rest.checks.create({
+    owner: params.owner,
+    repo: params.repo,
+    name: CHECK_RUN_NAME,
+    head_sha: params.headSha,
+    status: "completed",
+    conclusion,
+    output: {
+      title: params.mode === "lenient" ? "Lenient review completed" : "Strict review completed",
+      summary: params.decision.summary
+    },
+    actions:
+      params.mode === "strict" && conclusion === "action_required"
+        ? [
+            {
+              label: "Lenient check",
+              description: "Run only critical runtime checks.",
+              identifier: LENIENT_ACTION_IDENTIFIER
+            }
+          ]
+        : undefined
+  });
+}
+
+export function isLenientCheckAction(identifier: string): boolean {
+  return identifier === LENIENT_ACTION_IDENTIFIER;
 }
 
 async function waitForMergeable(
