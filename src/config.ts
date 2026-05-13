@@ -1,22 +1,47 @@
 import "dotenv/config";
 import { z } from "zod";
 
+const optionalString = z.preprocess((value) => {
+  return value === "" ? undefined : value;
+}, z.string().optional());
+
+const envBoolean = z.preprocess((value) => {
+  if (typeof value !== "string") {
+    return value;
+  }
+
+  switch (value.toLowerCase()) {
+    case "true":
+    case "1":
+    case "yes":
+    case "on":
+      return true;
+    case "false":
+    case "0":
+    case "no":
+    case "off":
+      return false;
+    default:
+      return value;
+  }
+}, z.boolean());
+
 const configSchema = z.object({
   port: z.coerce.number().int().positive().default(3000),
   webhookSecret: z.string().min(1),
   githubAppId: z.coerce.number().int().positive(),
   githubPrivateKey: z.string().min(1).transform((value) => value.replace(/\\n/g, "\n")),
   openAiApiKey: z.string().min(1),
-  openAiBaseUrl: z.string().url().optional(),
+  openAiBaseUrl: optionalString.pipe(z.string().url().optional()),
   openAiModel: z.string().min(1).default("gpt-4.1"),
   openAiReasoningEffort: z.enum(["default", "low", "medium", "high"]).optional().transform((value) => {
     return value === "default" ? undefined : value;
   }),
   botName: z.string().min(1).default("ghbot"),
   lenientApprovalUser: z.string().min(1).default("lezi-fun"),
-  autoMerge: z.coerce.boolean().default(false),
+  autoMerge: envBoolean.default(false),
   mergeMethod: z.enum(["merge", "squash", "rebase"]).default("squash"),
-  requireChecks: z.coerce.boolean().default(true),
+  requireChecks: envBoolean.default(true),
   maxPatchChars: z.coerce.number().int().positive().default(120_000)
 });
 

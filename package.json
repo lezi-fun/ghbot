@@ -11,6 +11,7 @@
     "dev:vercel": "vercel dev",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
+    "test": "tsx tests/config.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
