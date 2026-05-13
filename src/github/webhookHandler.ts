@@ -23,6 +23,15 @@ export function createGitHubWebhooks(): Webhooks {
         return;
       }
 
+      logger.info(
+        {
+          repository: payload.repository.full_name,
+          pullNumber: payload.pull_request.number,
+          action: payload.action,
+          installationId
+        },
+        "Handling pull request webhook."
+      );
       const octokit = await getInstallationOctokit(installationId);
       await processPullRequest(octokit, {
         owner: payload.repository.owner.login,
@@ -77,8 +86,16 @@ export function createGitHubWebhooks(): Webhooks {
   });
 
   webhooks.onError((error) => {
-    logger.error({ error }, "Webhook handler failed.");
+    logger.error({ err: error, error: getNestedWebhookError(error) }, "Webhook handler failed.");
   });
 
   return webhooks;
+}
+
+function getNestedWebhookError(error: unknown): unknown {
+  if (!error || typeof error !== "object" || !("error" in error)) {
+    return undefined;
+  }
+
+  return (error as { error?: unknown }).error;
 }
