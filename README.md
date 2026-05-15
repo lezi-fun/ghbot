@@ -116,6 +116,8 @@ npm run build
 npm start
 ```
 
+`npm start` runs `node dist/src/server.js`.
+
 Run it behind HTTPS. GitHub webhooks must reach `/webhooks/github`, and the app must keep the private key and webhook secret out of source control.
 
 ## Safety notes
