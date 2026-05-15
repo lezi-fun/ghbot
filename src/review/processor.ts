@@ -15,6 +15,8 @@ const CHECK_RUN_NAME = "ghbot review";
 export async function processPullRequest(octokit: Octokit, ref: PullRequestRef, mode: ReviewMode = "strict"): Promise<void> {
   const { owner, repo, pullNumber } = ref;
 
+  logger.info({ owner, repo, pullNumber, mode }, "Starting pull request review.");
+
   const { data: pullRequest } = await octokit.rest.pulls.get({
     owner,
     repo,
@@ -33,6 +35,18 @@ export async function processPullRequest(octokit: Octokit, ref: PullRequestRef, 
 
   const files = await listPullRequestFiles(octokit, owner, repo, pullNumber);
   const compactFiles = compactFilesForReview(files, config.maxPatchChars);
+  logger.info(
+    {
+      owner,
+      repo,
+      pullNumber,
+      mode,
+      fileCount: files.length,
+      compactFileCount: compactFiles.length,
+      headSha: pullRequest.head.sha
+    },
+    "Collected pull request files for review."
+  );
   const decision = await reviewer.review({
     title: pullRequest.title,
     body: pullRequest.body,
@@ -171,6 +185,16 @@ async function maybeMergePullRequest(
 
   const mergeablePullRequest = await waitForMergeable(octokit, owner, repo, pullNumber);
   if (mergeablePullRequest.mergeable !== true || mergeablePullRequest.mergeable_state === "dirty") {
+    logger.warn(
+      {
+        owner,
+        repo,
+        pullNumber,
+        mergeable: mergeablePullRequest.mergeable,
+        mergeableState: mergeablePullRequest.mergeable_state
+      },
+      "PR approved by review but not mergeable."
+    );
     await octokit.rest.issues.createComment({
       owner,
       repo,
@@ -187,6 +211,16 @@ async function maybeMergePullRequest(
       ref: params.headSha
     });
     if (!checks.ok) {
+      logger.warn(
+        {
+          owner,
+          repo,
+          pullNumber,
+          headSha: params.headSha,
+          reason: checks.reason
+        },
+        "PR approved by review but required checks are not green."
+      );
       await octokit.rest.issues.createComment({
         owner,
         repo,
@@ -204,6 +238,7 @@ async function maybeMergePullRequest(
     merge_method: config.mergeMethod,
     commit_title: `${params.title} (#${pullNumber})`
   });
+  logger.info({ owner, repo, pullNumber, mode: params.mode, mergeMethod: config.mergeMethod }, "Pull request merged.");
 }
 
 async function hasCurrentHeadApprovalFrom(
@@ -328,6 +363,20 @@ async function submitReview(
   const event: "APPROVE" | "REQUEST_CHANGES" =
     params.decision.safeToMerge && !hasBlockingFinding ? "APPROVE" : "REQUEST_CHANGES";
 
+  logger.info(
+    {
+      owner: params.owner,
+      repo: params.repo,
+      pullNumber: params.pullNumber,
+      mode: params.mode,
+      event,
+      commentCount: comments.length,
+      unpostedFindingCount: unpostedFindings.length,
+      findingCount: params.decision.findings.length
+    },
+    "Submitting pull request review to GitHub."
+  );
+
   await octokit.rest.pulls.createReview({
     owner: params.owner,
     repo: params.repo,
@@ -353,6 +402,19 @@ async function upsertReviewCheckRun(
   const hasBlockingFinding = params.decision.findings.some((finding) => finding.severity === "blocking");
   const conclusion =
     params.decision.shouldClosePullRequest || hasBlockingFinding || !params.decision.safeToMerge ? "action_required" : "success";
+
+  logger.info(
+    {
+      owner: params.owner,
+      repo: params.repo,
+      pullNumber: params.pullNumber,
+      mode: params.mode,
+      conclusion,
+      shouldClosePullRequest: params.decision.shouldClosePullRequest,
+      findingCount: params.decision.findings.length
+    },
+    "Updating review check run."
+  );
 
   await octokit.rest.checks.create({
     owner: params.owner,
@@ -410,6 +472,7 @@ async function closeMaliciousPullRequest(
     pull_number: params.pullNumber,
     state: "closed"
   });
+  logger.warn({ owner: params.owner, repo: params.repo, pullNumber: params.pullNumber, reason: params.reason }, "Malicious pull request closed.");
 }
 
 async function waitForMergeable(
@@ -426,8 +489,11 @@ async function waitForMergeable(
     });
 
     if (data.mergeable !== null) {
+      logger.info({ owner, repo, pullNumber, attempt: attempt + 1, mergeable: data.mergeable, mergeableState: data.mergeable_state }, "Resolved PR mergeability.");
       return data;
     }
+
+    logger.info({ owner, repo, pullNumber, attempt: attempt + 1 }, "PR mergeability not ready yet; retrying.");
 
     await new Promise((resolve) => setTimeout(resolve, 1_000));
   }
@@ -437,5 +503,6 @@ async function waitForMergeable(
     repo,
     pull_number: pullNumber
   });
+  logger.info({ owner, repo, pullNumber, mergeable: data.mergeable, mergeableState: data.mergeable_state }, "Using final PR mergeability state after retries.");
   return data;
 }

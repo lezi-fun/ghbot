@@ -23,19 +23,41 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const id = request.headers["x-github-delivery"];
   const name = request.headers["x-github-event"];
   const signature = request.headers["x-hub-signature-256"];
+  const userAgent = request.headers["user-agent"];
 
   if (typeof id !== "string" || typeof name !== "string" || typeof signature !== "string") {
+    logger.warn(
+      {
+        method: request.method,
+        path: request.url,
+        hasDeliveryId: typeof id === "string",
+        hasEventName: typeof name === "string",
+        hasSignature: typeof signature === "string"
+      },
+      "GitHub webhook request is missing required headers."
+    );
     response.status(400).json({ error: "Missing GitHub webhook headers." });
     return;
   }
 
   const payload = await readRawBody(request);
+  logger.info(
+    {
+      id,
+      name,
+      path: request.url,
+      userAgent,
+      payloadBytes: Buffer.byteLength(payload, "utf8")
+    },
+    "Received GitHub webhook request."
+  );
 
   try {
     const { createGitHubWebhooks } = await import("../../src/github/webhookHandler.js");
     const webhooks = createGitHubWebhooks();
     const verified = await webhooks.verify(payload, signature);
     if (!verified) {
+      logger.warn({ id, name, path: request.url }, "GitHub webhook signature verification failed.");
       response.status(401).json({ error: "Invalid webhook signature." });
       return;
     }
@@ -50,7 +72,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
     response.status(202).json({ ok: true });
   } catch (error) {
-    logger.error({ error }, "Failed to handle webhook.");
+    logger.error({ err: error, id, name, path: request.url, userAgent }, "Failed to handle webhook.");
     response.status(400).json({ error: "Invalid or failed webhook." });
   }
 }

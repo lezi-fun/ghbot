@@ -19,11 +19,30 @@ app.post("/webhooks/github", express.raw({ type: "application/json" }), async (r
   const signature = request.header("x-hub-signature-256");
 
   if (!id || !name || !signature) {
+    logger.warn(
+      {
+        method: request.method,
+        path: request.originalUrl,
+        hasDeliveryId: Boolean(id),
+        hasEventName: Boolean(name),
+        hasSignature: Boolean(signature)
+      },
+      "GitHub webhook request is missing required headers."
+    );
     response.status(400).json({ error: "Missing GitHub webhook headers." });
     return;
   }
 
   try {
+    logger.info(
+      {
+        id,
+        name,
+        path: request.originalUrl,
+        payloadBytes: Buffer.byteLength(request.body)
+      },
+      "Received GitHub webhook request."
+    );
     await webhooks.verifyAndReceive({
       id,
       name,
@@ -32,7 +51,7 @@ app.post("/webhooks/github", express.raw({ type: "application/json" }), async (r
     });
     response.status(202).json({ ok: true });
   } catch (error) {
-    logger.error({ error }, "Failed to handle webhook.");
+    logger.error({ err: error, id, name, path: request.originalUrl }, "Failed to handle webhook.");
     response.status(400).json({ error: "Invalid or failed webhook." });
   }
 });
