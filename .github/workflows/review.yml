@@ -35,15 +35,17 @@ jobs:
         with:
           node-version: 24
           cache: npm
+      - name: Install Codex CLI
+        run: npm install -g @openai/codex
       - run: npm ci
       - run: npm run build
       - run: node dist/src/actions/runReview.js
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
-          OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
-          OPENAI_REASONING_EFFORT: ${{ secrets.OPENAI_REASONING_EFFORT }}
+          CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+          CODEX_BASE_URL: ${{ vars.CODEX_BASE_URL || 'https://api.openai.com/v1' }}
+          CODEX_MODEL: ${{ vars.CODEX_MODEL || 'gpt-5.4' }}
+          CODEX_REASONING_EFFORT: ${{ vars.CODEX_REASONING_EFFORT || 'high' }}
           BOT_NAME: github-actions[bot]
           LENIENT_APPROVAL_USER: lezi-fun
           AUTO_MERGE: ${{ vars.AUTO_MERGE || 'false' }}

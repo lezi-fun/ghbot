@@ -5,11 +5,11 @@ import { collectValidNewLines, toDiffPosition } from "../github/diff.js";
 import { logger } from "../logger.js";
 import { withRetry } from "../retry.js";
 import type { PullRequestFile, PullRequestRef, ReviewDecision, ReviewFinding, ReviewMode } from "../types.js";
+import { CodexCliReviewer } from "./codexCliReviewer.js";
 import { formatReviewBody } from "./format.js";
-import { OpenAiReviewer } from "./openaiReviewer.js";
 import { compactFilesForReview } from "./prompt.js";
 
-const reviewer = new OpenAiReviewer();
+const reviewer = new CodexCliReviewer();
 const CHECK_RUN_NAME = "ghbot review";
 export const LENIENT_COMMENT_COMMAND = "/lenient-check";
 const ADMIN_RESPONSE_WINDOW_MS = 24 * 60 * 60 * 1000;

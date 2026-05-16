@@ -1,13 +1,13 @@
 # ghbot
 
-GitHub Actions bot that reviews pull requests with an AI reviewer, leaves inline review comments for problems, approves clean PRs, and can merge them when repository checks are green.
+GitHub Actions bot that reviews pull requests by calling Codex CLI, leaves inline review comments for problems, approves clean PRs, and can merge them when repository checks are green.
 
 ## Behavior
 
 - Triggers on `pull_request_target`: `opened`, `synchronize`, `reopened`, `ready_for_review`.
 - When a new PR is opened, posts an immediate comment that review has started.
 - Fetches changed files and patches from the pull request.
-- Asks the reviewer for a structured decision:
+- Asks Codex CLI for a structured decision:
   - `safeToMerge=true` only when there are no blocking findings.
   - `blocking` findings become request-changes reviews.
   - `suggestion` findings are included as non-blocking suggestions.
@@ -18,7 +18,7 @@ GitHub Actions bot that reviews pull requests with an AI reviewer, leaves inline
 - If the reviewer detects clearly malicious code, the bot comments with the reason and closes the pull request.
 - Posts inline comments only on valid added diff lines.
 - Approves clean pull requests.
-- Retries transient OpenAI and GitHub API request failures up to 5 times before giving up.
+- Retries transient Codex CLI and GitHub API request failures up to 5 times before giving up.
 - If `AUTO_MERGE=true`, merges only after:
   - the AI reviewer says the PR is safe,
   - GitHub reports the PR as mergeable,
@@ -28,19 +28,20 @@ GitHub Actions bot that reviews pull requests with an AI reviewer, leaves inline
 
 Add these repository secrets:
 
-- `OPENAI_API_KEY`
-- `OPENAI_BASE_URL`
-- `OPENAI_MODEL`
-- `OPENAI_REASONING_EFFORT`
+- `CODEX_API_KEY`
 
 Optional repository variables:
 
+- `CODEX_BASE_URL`: defaults to `https://api.openai.com/v1`
+- `CODEX_MODEL`: defaults to `gpt-5.4`
+- `CODEX_REASONING_EFFORT`: `minimal`, `low`, `medium`, `high`, or `xhigh`, defaults to `high`
 - `AUTO_MERGE`: defaults to `false`
 - `MERGE_METHOD`: `merge`, `squash`, or `rebase`, defaults to `squash`
 - `REQUIRE_CHECKS`: defaults to `true`
 - `MAX_PATCH_CHARS`: defaults to `120000`
 
 The workflow uses the repository `GITHUB_TOKEN`, so you do not need a GitHub App, webhook endpoint, Vercel deployment, or a self-hosted listener.
+It installs Codex CLI inside the GitHub Actions runner and uses that CLI for the review itself. The workflow writes an isolated Codex `config.toml` at runtime so each run gets an explicit model, provider base URL, and reasoning setting.
 
 ## Required workflow permissions
 
@@ -95,10 +96,10 @@ See [.env.example](/Users/home/Projects/ghbot/.env.example:1) for local testing 
 Important variables:
 
 - `GITHUB_TOKEN`: GitHub token used by the workflow or local simulation
-- `OPENAI_API_KEY`: API key for the reviewer model
-- `OPENAI_BASE_URL`: optional OpenAI-compatible API base URL
-- `OPENAI_MODEL`: defaults to `gpt-4.1`
-- `OPENAI_REASONING_EFFORT`: optional reasoning effort, one of `low`, `medium`, or `high`
+- `CODEX_API_KEY`: API key used by Codex CLI
+- `CODEX_BASE_URL`: optional Codex/OpenAI-compatible base URL
+- `CODEX_MODEL`: defaults to `gpt-5.4`
+- `CODEX_REASONING_EFFORT`: optional, one of `minimal`, `low`, `medium`, `high`, `xhigh`
 - `BOT_NAME`: defaults to `ghbot`, but the workflow sets it to `github-actions[bot]`
 - `LENIENT_APPROVAL_USER`: defaults to `lezi-fun`
 - `AUTO_MERGE`: defaults to `false`

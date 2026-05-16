@@ -5,10 +5,6 @@ const optionalString = z.preprocess((value) => {
   return value === "" ? undefined : value;
 }, z.string().optional());
 
-const optionalNonEmptyString = z.preprocess((value) => {
-  return value === "" ? undefined : value;
-}, z.string().min(1).optional());
-
 const envBoolean = z.preprocess((value) => {
   if (typeof value !== "string") {
     return value;
@@ -33,14 +29,12 @@ const envBoolean = z.preprocess((value) => {
 const configSchema = z.object({
   port: z.coerce.number().int().positive().default(3000),
   githubToken: z.string().min(1),
-  openAiApiKey: z.string().min(1),
-  openAiBaseUrl: optionalString.pipe(z.string().url().optional()),
-  openAiModel: optionalNonEmptyString.default("gpt-4.1"),
-  openAiReasoningEffort: z.preprocess((value) => {
+  codexModel: optionalString.default("gpt-5.4"),
+  codexReasoningEffort: z.preprocess((value) => {
     return value === "" ? undefined : value;
-  }, z.enum(["default", "low", "medium", "high"]).optional()).transform((value) => {
-    return value === "default" ? undefined : value;
-  }),
+  }, z.enum(["minimal", "low", "medium", "high", "xhigh"]).optional()),
+  codexBaseUrl: optionalString,
+  codexApiKey: z.string().min(1),
   botName: z.string().min(1).default("ghbot"),
   lenientApprovalUser: z.string().min(1).default("lezi-fun"),
   autoMerge: envBoolean.default(false),
@@ -53,10 +47,10 @@ const configSchema = z.object({
 export const config = configSchema.parse({
   port: process.env.PORT,
   githubToken: process.env.GITHUB_TOKEN,
-  openAiApiKey: process.env.OPENAI_API_KEY,
-  openAiBaseUrl: process.env.OPENAI_BASE_URL,
-  openAiModel: process.env.OPENAI_MODEL,
-  openAiReasoningEffort: process.env.OPENAI_REASONING_EFFORT,
+  codexModel: process.env.CODEX_MODEL,
+  codexReasoningEffort: process.env.CODEX_REASONING_EFFORT,
+  codexBaseUrl: process.env.CODEX_BASE_URL,
+  codexApiKey: process.env.CODEX_API_KEY,
   botName: process.env.BOT_NAME,
   lenientApprovalUser: process.env.LENIENT_APPROVAL_USER,
   autoMerge: process.env.AUTO_MERGE,
