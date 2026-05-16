@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -35,7 +34,9 @@ export class CodexCliReviewer {
     mode: ReviewMode;
   }): Promise<ReviewDecision> {
     return withRetry("codex.exec.review", async () => {
-      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ghbot-codex-"));
+      const tempRoot = path.join(process.cwd(), ".ghbot-tmp");
+      await fs.mkdir(tempRoot, { recursive: true });
+      const tempDir = await fs.mkdtemp(path.join(tempRoot, "codex-"));
       const schemaPath = path.join(tempDir, "review-schema.json");
       const outputPath = path.join(tempDir, "review-output.json");
       const codexHome = path.join(tempDir, "codex-home");
@@ -51,8 +52,6 @@ export class CodexCliReviewer {
           "--skip-git-repo-check",
           "--sandbox",
           "workspace-write",
-          "--ask-for-approval",
-          "never",
           "--output-schema",
           schemaPath,
           "--output-last-message",
