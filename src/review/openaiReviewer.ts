@@ -1,6 +1,7 @@
 import { OpenAI } from "openai";
 import { z } from "zod";
 import { config } from "../config.js";
+import { withRetry } from "../retry.js";
 import type { PullRequestFile, ReviewDecision, ReviewMode } from "../types.js";
 
 const reviewDecisionSchema = z.object({
@@ -31,62 +32,64 @@ export class OpenAiReviewer {
     files: PullRequestFile[];
     mode: ReviewMode;
   }): Promise<ReviewDecision> {
-    const response = await this.client.responses.create({
-      model: config.openAiModel,
-      temperature: 0.1,
-      ...(config.openAiReasoningEffort ? { reasoning: { effort: config.openAiReasoningEffort } } : {}),
-      text: {
-        format: {
-          name: "pull_request_review",
-          type: "json_schema",
-          strict: true,
-          schema: {
-            type: "object",
-            additionalProperties: false,
-            required: ["safeToMerge", "shouldClosePullRequest", "closeReason", "summary", "findings"],
-            properties: {
-              safeToMerge: { type: "boolean" },
-              shouldClosePullRequest: { type: "boolean" },
-              closeReason: { type: "string" },
-              summary: { type: "string" },
-              findings: {
-                type: "array",
-                items: {
-                  type: "object",
-                  additionalProperties: false,
-                  required: ["path", "line", "severity", "title", "body"],
-                  properties: {
-                    path: { type: "string" },
-                    line: { type: "integer", minimum: 1 },
-                    severity: { type: "string", enum: ["blocking", "suggestion"] },
-                    title: { type: "string" },
-                    body: { type: "string" }
+    const response = await withRetry("openai.responses.create", async () => {
+      return this.client.responses.create({
+        model: config.openAiModel,
+        temperature: 0.1,
+        ...(config.openAiReasoningEffort ? { reasoning: { effort: config.openAiReasoningEffort } } : {}),
+        text: {
+          format: {
+            name: "pull_request_review",
+            type: "json_schema",
+            strict: true,
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              required: ["safeToMerge", "shouldClosePullRequest", "closeReason", "summary", "findings"],
+              properties: {
+                safeToMerge: { type: "boolean" },
+                shouldClosePullRequest: { type: "boolean" },
+                closeReason: { type: "string" },
+                summary: { type: "string" },
+                findings: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["path", "line", "severity", "title", "body"],
+                    properties: {
+                      path: { type: "string" },
+                      line: { type: "integer", minimum: 1 },
+                      severity: { type: "string", enum: ["blocking", "suggestion"] },
+                      title: { type: "string" },
+                      body: { type: "string" }
+                    }
                   }
                 }
               }
             }
           }
-        }
-      },
-      instructions: buildSystemPrompt(input.mode),
-      input: [
-        {
-          role: "user",
-          content: JSON.stringify({
-            pullRequest: {
-              title: input.title,
-              body: input.body ?? ""
-            },
-            files: input.files.map((file) => ({
-              path: file.filename,
-              status: file.status,
-              additions: file.additions,
-              deletions: file.deletions,
-              patch: file.patch ?? ""
-            }))
-          })
-        }
-      ]
+        },
+        instructions: buildSystemPrompt(input.mode),
+        input: [
+          {
+            role: "user",
+            content: JSON.stringify({
+              pullRequest: {
+                title: input.title,
+                body: input.body ?? ""
+              },
+              files: input.files.map((file) => ({
+                path: file.filename,
+                status: file.status,
+                additions: file.additions,
+                deletions: file.deletions,
+                patch: file.patch ?? ""
+              }))
+            })
+          }
+        ]
+      });
     });
 
     const raw = response.output_text;

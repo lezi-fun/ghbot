@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { config } from "../config.js";
 import { createGitHubClient } from "../github/client.js";
 import { logger } from "../logger.js";
+import { withRetry } from "../retry.js";
 import {
   processLenientCheckComment,
   processPullRequest,
@@ -73,11 +74,13 @@ async function main(): Promise<void> {
   if (eventName === "pull_request_target") {
     const prPayload = payload as PullRequestPayload;
     if (prPayload.action === "opened") {
-      await octokit.rest.issues.createComment({
-        owner: prPayload.repository.owner.login,
-        repo: prPayload.repository.name,
-        issue_number: prPayload.pull_request.number,
-        body: "Automated review has started. I am checking this pull request now."
+      await withRetry("github.issues.createComment.started", async () => {
+        return octokit.rest.issues.createComment({
+          owner: prPayload.repository.owner.login,
+          repo: prPayload.repository.name,
+          issue_number: prPayload.pull_request.number,
+          body: "Automated review has started. I am checking this pull request now."
+        });
       });
     }
 

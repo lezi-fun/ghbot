@@ -3,6 +3,7 @@ import { config } from "../config.js";
 import { requiredChecksAreGreen } from "../github/checks.js";
 import { collectValidNewLines, toDiffPosition } from "../github/diff.js";
 import { logger } from "../logger.js";
+import { withRetry } from "../retry.js";
 import type { PullRequestFile, PullRequestRef, ReviewDecision, ReviewFinding, ReviewMode } from "../types.js";
 import { formatReviewBody } from "./format.js";
 import { OpenAiReviewer } from "./openaiReviewer.js";
@@ -188,11 +189,13 @@ export async function processLenientCheckComment(
     "Processing lenient check comment command."
   );
 
-  await octokit.rest.issues.createComment({
-    owner: params.owner,
-    repo: params.repo,
-    issue_number: params.pullNumber,
-    body: `Lenient check requested by @${params.commenterLogin}. Re-running the review with runtime and security focus only.`
+  await withRetry("github.issues.createComment.lenientRequested", async () => {
+    return octokit.rest.issues.createComment({
+      owner: params.owner,
+      repo: params.repo,
+      issue_number: params.pullNumber,
+      body: `Lenient check requested by @${params.commenterLogin}. Re-running the review with runtime and security focus only.`
+    });
   });
 
   await processPullRequest(
@@ -234,11 +237,13 @@ async function maybeMergePullRequest(
     });
 
     if (!approvedByOwner) {
-      await octokit.rest.issues.createComment({
-        owner,
-        repo,
-        issue_number: pullNumber,
-        body: `Lenient check passed, but this PR will not be merged until @${config.lenientApprovalUser} approves the current head commit.`
+      await withRetry("github.issues.createComment.awaitLenientApproval", async () => {
+        return octokit.rest.issues.createComment({
+          owner,
+          repo,
+          issue_number: pullNumber,
+          body: `Lenient check passed, but this PR will not be merged until @${config.lenientApprovalUser} approves the current head commit.`
+        });
       });
       logger.info({ owner, repo, pullNumber, reviewer: config.lenientApprovalUser }, "Waiting for lenient approval before merging.");
       return;
@@ -247,11 +252,13 @@ async function maybeMergePullRequest(
 
   const mergeablePullRequest = await waitForMergeable(octokit, owner, repo, pullNumber);
   if (mergeablePullRequest.mergeable !== true || mergeablePullRequest.mergeable_state === "dirty") {
-    await octokit.rest.issues.createComment({
-      owner,
-      repo,
-      issue_number: pullNumber,
-      body: `Automated review approved this PR, but it was not merged because GitHub reports mergeable=${mergeablePullRequest.mergeable} and mergeable_state=${mergeablePullRequest.mergeable_state}.`
+    await withRetry("github.issues.createComment.notMergeable", async () => {
+      return octokit.rest.issues.createComment({
+        owner,
+        repo,
+        issue_number: pullNumber,
+        body: `Automated review approved this PR, but it was not merged because GitHub reports mergeable=${mergeablePullRequest.mergeable} and mergeable_state=${mergeablePullRequest.mergeable_state}.`
+      });
     });
     return;
   }
@@ -263,22 +270,26 @@ async function maybeMergePullRequest(
       ref: params.headSha
     });
     if (!checks.ok) {
-      await octokit.rest.issues.createComment({
-        owner,
-        repo,
-        issue_number: pullNumber,
-        body: `Automated review approved this PR, but it was not merged because required checks are not green. ${checks.reason ?? ""}`.trim()
+      await withRetry("github.issues.createComment.requiredChecks", async () => {
+        return octokit.rest.issues.createComment({
+          owner,
+          repo,
+          issue_number: pullNumber,
+          body: `Automated review approved this PR, but it was not merged because required checks are not green. ${checks.reason ?? ""}`.trim()
+        });
       });
       return;
     }
   }
 
-  await octokit.rest.pulls.merge({
-    owner,
-    repo,
-    pull_number: pullNumber,
-    merge_method: config.mergeMethod,
-    commit_title: `${params.title} (#${pullNumber})`
+  await withRetry("github.pulls.merge", async () => {
+    return octokit.rest.pulls.merge({
+      owner,
+      repo,
+      pull_number: pullNumber,
+      merge_method: config.mergeMethod,
+      commit_title: `${params.title} (#${pullNumber})`
+    });
   });
 }
 
@@ -380,14 +391,16 @@ async function submitReview(
   const event: "APPROVE" | "REQUEST_CHANGES" =
     params.decision.safeToMerge && !hasBlockingFinding ? "APPROVE" : "REQUEST_CHANGES";
 
-  await octokit.rest.pulls.createReview({
-    owner: params.owner,
-    repo: params.repo,
-    pull_number: params.pullNumber,
-    commit_id: params.commitId,
-    event,
-    body: formatReviewBody(params.decision, unpostedFindings, params.mode),
-    comments
+  await withRetry("github.pulls.createReview", async () => {
+    return octokit.rest.pulls.createReview({
+      owner: params.owner,
+      repo: params.repo,
+      pull_number: params.pullNumber,
+      commit_id: params.commitId,
+      event,
+      body: formatReviewBody(params.decision, unpostedFindings, params.mode),
+      comments
+    });
   });
 }
 
@@ -406,24 +419,26 @@ async function upsertReviewCheckRun(
   const conclusion =
     params.decision.shouldClosePullRequest || hasBlockingFinding || !params.decision.safeToMerge ? "action_required" : "success";
 
-  await octokit.rest.checks.create({
-    owner: params.owner,
-    repo: params.repo,
-    name: CHECK_RUN_NAME,
-    head_sha: params.headSha,
-    status: "completed",
-    conclusion,
-    output: {
-      title: params.decision.shouldClosePullRequest
-        ? "Malicious code detected"
-        : params.mode === "lenient"
-          ? "Lenient review completed"
-          : "Strict review completed",
-      summary: params.decision.shouldClosePullRequest
-        ? `${params.decision.summary}\n\nClose reason: ${params.decision.closeReason}`
-        : params.decision.summary
-    },
-    details_url: `https://github.com/${params.owner}/${params.repo}/pull/${params.pullNumber}`
+  await withRetry("github.checks.create", async () => {
+    return octokit.rest.checks.create({
+      owner: params.owner,
+      repo: params.repo,
+      name: CHECK_RUN_NAME,
+      head_sha: params.headSha,
+      status: "completed",
+      conclusion,
+      output: {
+        title: params.decision.shouldClosePullRequest
+          ? "Malicious code detected"
+          : params.mode === "lenient"
+            ? "Lenient review completed"
+            : "Strict review completed",
+        summary: params.decision.shouldClosePullRequest
+          ? `${params.decision.summary}\n\nClose reason: ${params.decision.closeReason}`
+          : params.decision.summary
+      },
+      details_url: `https://github.com/${params.owner}/${params.repo}/pull/${params.pullNumber}`
+    });
   });
 }
 
@@ -440,18 +455,22 @@ async function closeMaliciousPullRequest(
     reason: string;
   }
 ): Promise<void> {
-  await octokit.rest.issues.createComment({
-    owner: params.owner,
-    repo: params.repo,
-    issue_number: params.pullNumber,
-    body: `This PR was automatically closed because the review detected clearly malicious code.\n\nReason: ${params.reason}`
+  await withRetry("github.issues.createComment.closeMalicious", async () => {
+    return octokit.rest.issues.createComment({
+      owner: params.owner,
+      repo: params.repo,
+      issue_number: params.pullNumber,
+      body: `This PR was automatically closed because the review detected clearly malicious code.\n\nReason: ${params.reason}`
+    });
   });
 
-  await octokit.rest.pulls.update({
-    owner: params.owner,
-    repo: params.repo,
-    pull_number: params.pullNumber,
-    state: "closed"
+  await withRetry("github.pulls.update.closeMalicious", async () => {
+    return octokit.rest.pulls.update({
+      owner: params.owner,
+      repo: params.repo,
+      pull_number: params.pullNumber,
+      state: "closed"
+    });
   });
 }
 

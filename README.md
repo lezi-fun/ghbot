@@ -18,6 +18,7 @@ GitHub Actions bot that reviews pull requests with an AI reviewer, leaves inline
 - If the reviewer detects clearly malicious code, the bot comments with the reason and closes the pull request.
 - Posts inline comments only on valid added diff lines.
 - Approves clean pull requests.
+- Retries transient OpenAI and GitHub API request failures up to 5 times before giving up.
 - If `AUTO_MERGE=true`, merges only after:
   - the AI reviewer says the PR is safe,
   - GitHub reports the PR as mergeable,
