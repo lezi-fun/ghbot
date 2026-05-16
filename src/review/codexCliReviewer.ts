@@ -1,14 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { spawn } from "node:child_process";
 import { z } from "zod";
 import { config } from "../config.js";
 import { logger } from "../logger.js";
 import { withRetry } from "../retry.js";
 import type { PullRequestFile, ReviewDecision, ReviewMode } from "../types.js";
 
-const execFileAsync = promisify(execFile);
+const CODEX_EXEC_TIMEOUT_MS = 3 * 60 * 1000;
 
 const reviewDecisionSchema = z.object({
   safeToMerge: z.boolean(),
@@ -75,14 +74,9 @@ export class CodexCliReviewer {
         );
 
         try {
-          await execFileAsync("codex", args, {
-            cwd: process.cwd(),
-            env: {
-              ...process.env,
-              CODEX_HOME: codexHome,
-              CODEX_API_KEY: config.codexApiKey
-            },
-            maxBuffer: 10 * 1024 * 1024
+          await runCodexExec(args, {
+            CODEX_HOME: codexHome,
+            CODEX_API_KEY: config.codexApiKey
           });
         } catch (error) {
           logger.error(
@@ -106,6 +100,84 @@ export class CodexCliReviewer {
       }
     });
   }
+}
+
+async function runCodexExec(args: string[], extraEnv: Record<string, string>): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn("codex", args, {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        ...extraEnv
+      },
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+
+    let stdout = "";
+    let stderr = "";
+    let finished = false;
+
+    const timeout = setTimeout(() => {
+      if (finished) {
+        return;
+      }
+
+      child.kill("SIGTERM");
+      reject(new Error(`Codex CLI review timed out after ${CODEX_EXEC_TIMEOUT_MS}ms.`));
+    }, CODEX_EXEC_TIMEOUT_MS);
+
+    child.stdout.on("data", (chunk: Buffer | string) => {
+      const text = chunk.toString();
+      stdout += text;
+      const trimmed = text.trim();
+      if (trimmed) {
+        logger.info({ chunk: trimmed }, "Codex CLI stdout.");
+      }
+    });
+
+    child.stderr.on("data", (chunk: Buffer | string) => {
+      const text = chunk.toString();
+      stderr += text;
+      const trimmed = text.trim();
+      if (trimmed) {
+        logger.warn({ chunk: trimmed }, "Codex CLI stderr.");
+      }
+    });
+
+    child.on("error", (error) => {
+      if (finished) {
+        return;
+      }
+
+      finished = true;
+      clearTimeout(timeout);
+      reject(error);
+    });
+
+    child.on("close", (code, signal) => {
+      if (finished) {
+        return;
+      }
+
+      finished = true;
+      clearTimeout(timeout);
+
+      if (code === 0) {
+        resolve();
+        return;
+      }
+
+      reject(
+        Object.assign(new Error(`Codex CLI exited with code ${code ?? "null"} and signal ${signal ?? "null"}.`), {
+          code,
+          signal,
+          stdout,
+          stderr,
+          cmd: `codex ${args.join(" ")}`
+        })
+      );
+    });
+  });
 }
 
 function buildCodexConfig(): string {
