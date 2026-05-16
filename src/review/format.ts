@@ -14,6 +14,10 @@ export function formatReviewBody(decision: ReviewDecision, unpostedFindings: Rev
     `Decision: ${decision.safeToMerge ? "safe to merge" : "changes requested"}`
   ];
 
+  if (mode === "strict" && !decision.safeToMerge && !decision.shouldClosePullRequest) {
+    lines.push("", "Need a narrower pass? Comment `/lenient-check` on this PR.");
+  }
+
   if (unpostedFindings.length > 0) {
     lines.push("", "Findings that could not be attached inline:");
     for (const finding of unpostedFindings) {

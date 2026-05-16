@@ -1,5 +1,7 @@
 import type { Octokit } from "@octokit/rest";
 
+const IGNORED_CHECK_RUN_NAMES = new Set(["ghbot review", "bot-review"]);
+
 export async function requiredChecksAreGreen(
   octokit: Octokit,
   params: {
@@ -22,6 +24,10 @@ export async function requiredChecksAreGreen(
   ]);
 
   const failedCheck = checks.data.check_runs.find((check) => {
+    if (IGNORED_CHECK_RUN_NAMES.has(check.name)) {
+      return false;
+    }
+
     return (
       check.status !== "completed" ||
       !["success", "neutral", "skipped"].includes(check.conclusion ?? "")

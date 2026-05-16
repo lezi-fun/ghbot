@@ -9,8 +9,9 @@ import { OpenAiReviewer } from "./openaiReviewer.js";
 import { compactFilesForReview } from "./prompt.js";
 
 const reviewer = new OpenAiReviewer();
-const LENIENT_ACTION_IDENTIFIER = "lenient_check";
 const CHECK_RUN_NAME = "ghbot review";
+export const LENIENT_COMMENT_COMMAND = "/lenient-check";
+const ADMIN_RESPONSE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 export async function processPullRequest(octokit: Octokit, ref: PullRequestRef, mode: ReviewMode = "strict"): Promise<void> {
   const { owner, repo, pullNumber } = ref;
@@ -130,6 +131,81 @@ export async function processPullRequestReviewApproval(
   });
 }
 
+export async function processLenientCheckComment(
+  octokit: Octokit,
+  params: {
+    owner: string;
+    repo: string;
+    pullNumber: number;
+    commenterLogin: string;
+    commentBody: string;
+  }
+): Promise<void> {
+  if (!isLenientCheckComment(params.commentBody)) {
+    return;
+  }
+
+  const adminRecentlyResponded = await hasRecentAdminResponse(octokit, {
+    owner: params.owner,
+    repo: params.repo,
+    pullNumber: params.pullNumber
+  });
+
+  const { data: permission } = await octokit.rest.repos.getCollaboratorPermissionLevel({
+    owner: params.owner,
+    repo: params.repo,
+    username: params.commenterLogin
+  });
+
+  const allowedPermissions = adminRecentlyResponded
+    ? new Set(["admin"])
+    : new Set(["admin", "maintain", "write"]);
+
+  if (!allowedPermissions.has(permission.permission)) {
+    logger.info(
+      {
+        owner: params.owner,
+        repo: params.repo,
+        pullNumber: params.pullNumber,
+        commenterLogin: params.commenterLogin,
+        permission: permission.permission,
+        adminRecentlyResponded
+      },
+      "Ignoring lenient check comment because commenter does not meet the current permission threshold."
+    );
+    return;
+  }
+
+  logger.info(
+    {
+      owner: params.owner,
+      repo: params.repo,
+      pullNumber: params.pullNumber,
+      commenterLogin: params.commenterLogin,
+      adminRecentlyResponded,
+      permission: permission.permission
+    },
+    "Processing lenient check comment command."
+  );
+
+  await octokit.rest.issues.createComment({
+    owner: params.owner,
+    repo: params.repo,
+    issue_number: params.pullNumber,
+    body: `Lenient check requested by @${params.commenterLogin}. Re-running the review with runtime and security focus only.`
+  });
+
+  await processPullRequest(
+    octokit,
+    {
+      owner: params.owner,
+      repo: params.repo,
+      pullNumber: params.pullNumber
+    },
+    "lenient"
+  );
+}
+
 async function maybeMergePullRequest(
   octokit: Octokit,
   params: {
@@ -232,37 +308,6 @@ async function hasCurrentHeadApprovalFrom(
   });
 }
 
-export async function processLenientCheckRunAction(
-  octokit: Octokit,
-  params: {
-    owner: string;
-    repo: string;
-    headSha: string;
-  }
-): Promise<void> {
-  const pulls = await octokit.rest.repos.listPullRequestsAssociatedWithCommit({
-    owner: params.owner,
-    repo: params.repo,
-    commit_sha: params.headSha
-  });
-
-  const pullRequest = pulls.data.find((pull) => pull.state === "open");
-  if (!pullRequest) {
-    logger.warn(params, "No open pull request found for lenient check action.");
-    return;
-  }
-
-  await processPullRequest(
-    octokit,
-    {
-      owner: params.owner,
-      repo: params.repo,
-      pullNumber: pullRequest.number
-    },
-    "lenient"
-  );
-}
-
 async function listPullRequestFiles(
   octokit: Octokit,
   owner: string,
@@ -297,6 +342,13 @@ async function submitReview(
     mode: ReviewMode;
   }
 ): Promise<void> {
+  await dismissExistingBotReviews(octokit, {
+    owner: params.owner,
+    repo: params.repo,
+    pullNumber: params.pullNumber,
+    commitId: params.commitId
+  });
+
   const validLines = collectValidNewLines(params.files);
   const filesByPath = new Map(params.files.map((file) => [file.filename, file]));
   const unpostedFindings: ReviewFinding[] = [];
@@ -371,21 +423,12 @@ async function upsertReviewCheckRun(
         ? `${params.decision.summary}\n\nClose reason: ${params.decision.closeReason}`
         : params.decision.summary
     },
-    actions:
-      params.mode === "strict" && conclusion === "action_required"
-        ? [
-            {
-              label: "Lenient check",
-              description: "Run only critical runtime checks.",
-              identifier: LENIENT_ACTION_IDENTIFIER
-            }
-          ]
-        : undefined
+    details_url: `https://github.com/${params.owner}/${params.repo}/pull/${params.pullNumber}`
   });
 }
 
-export function isLenientCheckAction(identifier: string): boolean {
-  return identifier === LENIENT_ACTION_IDENTIFIER;
+export function isLenientCheckComment(body: string): boolean {
+  return body.trim().startsWith(LENIENT_COMMENT_COMMAND);
 }
 
 async function closeMaliciousPullRequest(
@@ -438,4 +481,131 @@ async function waitForMergeable(
     pull_number: pullNumber
   });
   return data;
+}
+
+async function dismissExistingBotReviews(
+  octokit: Octokit,
+  params: {
+    owner: string;
+    repo: string;
+    pullNumber: number;
+    commitId: string;
+  }
+): Promise<void> {
+  const reviews = await octokit.paginate(octokit.rest.pulls.listReviews, {
+    owner: params.owner,
+    repo: params.repo,
+    pull_number: params.pullNumber,
+    per_page: 100
+  });
+
+  for (const review of reviews) {
+    if (review.user?.login !== config.botName) {
+      continue;
+    }
+
+    if (review.commit_id !== params.commitId) {
+      continue;
+    }
+
+    if (!review.id || review.state === "DISMISSED") {
+      continue;
+    }
+
+    try {
+      await octokit.rest.pulls.dismissReview({
+        owner: params.owner,
+        repo: params.repo,
+        pull_number: params.pullNumber,
+        review_id: review.id,
+        message: "Superseded by a newer automated review run."
+      });
+    } catch (error) {
+      logger.warn(
+        {
+          error,
+          owner: params.owner,
+          repo: params.repo,
+          pullNumber: params.pullNumber,
+          reviewId: review.id
+        },
+        "Failed to dismiss existing bot review."
+      );
+    }
+  }
+}
+
+async function hasRecentAdminResponse(
+  octokit: Octokit,
+  params: {
+    owner: string;
+    repo: string;
+    pullNumber: number;
+  }
+): Promise<boolean> {
+  const threshold = Date.now() - ADMIN_RESPONSE_WINDOW_MS;
+
+  const [comments, reviews] = await Promise.all([
+    octokit.paginate(octokit.rest.issues.listComments, {
+      owner: params.owner,
+      repo: params.repo,
+      issue_number: params.pullNumber,
+      per_page: 100
+    }),
+    octokit.paginate(octokit.rest.pulls.listReviews, {
+      owner: params.owner,
+      repo: params.repo,
+      pull_number: params.pullNumber,
+      per_page: 100
+    })
+  ]);
+
+  const actors = new Map<string, number>();
+
+  for (const comment of comments) {
+    const login = comment.user?.login;
+    const createdAt = comment.created_at ? Date.parse(comment.created_at) : NaN;
+    if (!login || Number.isNaN(createdAt) || createdAt < threshold) {
+      continue;
+    }
+
+    actors.set(login, Math.max(actors.get(login) ?? 0, createdAt));
+  }
+
+  for (const review of reviews) {
+    const login = review.user?.login;
+    const submittedAt = review.submitted_at ? Date.parse(review.submitted_at) : NaN;
+    if (!login || Number.isNaN(submittedAt) || submittedAt < threshold) {
+      continue;
+    }
+
+    actors.set(login, Math.max(actors.get(login) ?? 0, submittedAt));
+  }
+
+  for (const login of actors.keys()) {
+    try {
+      const { data: permission } = await octokit.rest.repos.getCollaboratorPermissionLevel({
+        owner: params.owner,
+        repo: params.repo,
+        username: login
+      });
+
+      if (permission.permission === "admin") {
+        return true;
+      }
+    } catch (error) {
+      logger.warn(
+        {
+          error,
+          owner: params.owner,
+          repo: params.repo,
+          pullNumber: params.pullNumber,
+          login
+        },
+        "Failed to resolve collaborator permission while checking for recent admin response."
+      );
+    }
+  }
+
+  return false;
 }

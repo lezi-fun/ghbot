@@ -1,0 +1,53 @@
+name: PR Review Bot
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+  issue_comment:
+    types:
+      - created
+  pull_request_review:
+    types:
+      - submitted
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: write
+  statuses: read
+  issues: write
+
+jobs:
+  review:
+    name: bot-review
+    if: |
+      github.event_name == 'pull_request_target' ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request != null) ||
+      github.event_name == 'pull_request_review'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: node dist/src/actions/runReview.js
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+          OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
+          OPENAI_REASONING_EFFORT: ${{ secrets.OPENAI_REASONING_EFFORT }}
+          BOT_NAME: github-actions[bot]
+          LENIENT_APPROVAL_USER: lezi-fun
+          AUTO_MERGE: ${{ vars.AUTO_MERGE || 'false' }}
+          MERGE_METHOD: ${{ vars.MERGE_METHOD || 'squash' }}
+          REQUIRE_CHECKS: ${{ vars.REQUIRE_CHECKS || 'true' }}
+          MAX_PATCH_CHARS: ${{ vars.MAX_PATCH_CHARS || '120000' }}
+          LOG_LEVEL: info

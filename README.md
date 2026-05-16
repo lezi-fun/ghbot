@@ -1,18 +1,20 @@
 # ghbot
 
-GitHub App bot that reviews pull requests with an AI reviewer, leaves inline review comments for problems, approves clean PRs, and can merge them when repository checks are green.
+GitHub Actions bot that reviews pull requests with an AI reviewer, leaves inline review comments for problems, approves clean PRs, and can merge them when repository checks are green.
 
 ## Behavior
 
-- Listens for `pull_request` events: `opened`, `synchronize`, `reopened`, `ready_for_review`.
+- Triggers on `pull_request_target`: `opened`, `synchronize`, `reopened`, `ready_for_review`.
+- When a new PR is opened, posts an immediate comment that review has started.
 - Fetches changed files and patches from the pull request.
 - Asks the reviewer for a structured decision:
   - `safeToMerge=true` only when there are no blocking findings.
   - `blocking` findings become request-changes reviews.
   - `suggestion` findings are included as non-blocking suggestions.
-- Creates a GitHub check run with a `Lenient check` button when strict review requests changes.
-- When `Lenient check` is clicked, reviews again and only blocks dangerous changes, runtime-impacting issues, errors, crashes, broken builds, data-loss risks, and security risks.
-- A PR that passes `Lenient check` is not auto-merged until `@lezi-fun` approves the current head commit.
+- Supports a lenient pass when a repository administrator comments `/lenient-check`.
+- If no repository administrator has commented or reviewed within the last 24 hours, the lenient trigger automatically broadens to users with `write`, `maintain`, or `admin` permission.
+- In lenient mode, only blocks dangerous changes, runtime-impacting issues, errors, crashes, broken builds, data-loss risks, and security risks.
+- A PR that passes lenient mode is not auto-merged until `@lezi-fun` approves the current head commit.
 - If the reviewer detects clearly malicious code, the bot comments with the reason and closes the pull request.
 - Posts inline comments only on valid added diff lines.
 - Approves clean pull requests.
@@ -21,115 +23,90 @@ GitHub App bot that reviews pull requests with an AI reviewer, leaves inline rev
   - GitHub reports the PR as mergeable,
   - checks/statuses are green when `REQUIRE_CHECKS=true`.
 
-## GitHub App setup
+## GitHub Actions setup
 
-Create a GitHub App with these repository permissions:
+Add these repository secrets:
 
-- Contents: `Read & write`
-- Pull requests: `Read & write`
-- Checks: `Read & write`
-- Commit statuses: `Read-only`
-- Metadata: `Read-only`
+- `OPENAI_API_KEY`
+- `OPENAI_BASE_URL`
+- `OPENAI_MODEL`
+- `OPENAI_REASONING_EFFORT`
 
-Subscribe to this webhook event:
+Optional repository variables:
 
-- Pull request
-- Check run
+- `AUTO_MERGE`: defaults to `false`
+- `MERGE_METHOD`: `merge`, `squash`, or `rebase`, defaults to `squash`
+- `REQUIRE_CHECKS`: defaults to `true`
+- `MAX_PATCH_CHARS`: defaults to `120000`
 
-Set the webhook URL to:
+The workflow uses the repository `GITHUB_TOKEN`, so you do not need a GitHub App, webhook endpoint, Vercel deployment, or a self-hosted listener.
+
+## Required workflow permissions
+
+Repository Actions permissions must allow the workflow token to:
+
+- `contents: write`
+- `pull-requests: write`
+- `checks: write`
+- `issues: write`
+- `statuses: read`
+
+These permissions are declared in [.github/workflows/review.yml](/Users/home/Projects/ghbot/.github/workflows/review.yml:1).
+
+## Lenient check
+
+If a strict review leaves findings that are not practical to change, a repository administrator can comment this on the PR:
 
 ```text
-https://your-domain.example/webhooks/github
+/lenient-check
 ```
 
-Generate a private key for the app, install the app on the target repositories, and copy `.env.example` to `.env`.
+That reruns the AI in lenient mode.
 
-## Configuration
+If no administrator has commented or reviewed within the last 24 hours on that PR, the command is also accepted from users with `write` or `maintain` permission.
 
-```bash
-cp .env.example .env
-```
-
-Required variables:
-
-- `WEBHOOK_SECRET`: the GitHub App webhook secret.
-- `GITHUB_APP_ID`: GitHub App ID.
-- `GITHUB_PRIVATE_KEY`: GitHub App private key. Use escaped `\n` line breaks in a single-line env var.
-- `OPENAI_API_KEY`: API key for the reviewer model.
-- `OPENAI_BASE_URL`: optional OpenAI-compatible API base URL.
-
-Important optional variables:
-
-- `OPENAI_MODEL`: defaults to `gpt-4.1`.
-- `OPENAI_REASONING_EFFORT`: optional reasoning effort, one of `low`, `medium`, or `high`. Use `default` or leave unset to omit the parameter.
-- `AUTO_MERGE`: defaults to `false`. Set to `true` only after testing on a non-critical repo.
-- `MERGE_METHOD`: `merge`, `squash`, or `rebase`. Defaults to `squash`.
-- `REQUIRE_CHECKS`: defaults to `true`.
-- `LENIENT_APPROVAL_USER`: defaults to `lezi-fun`.
-- `MAX_PATCH_CHARS`: maximum patch payload sent to the reviewer. Defaults to `120000`.
+If lenient mode passes, the bot still requires `@lezi-fun` to approve the current head commit before merge.
 
 ## Local development
 
 ```bash
 npm install
-npm run dev
-```
-
-Expose the local server with a tunnel and point the GitHub App webhook to:
-
-```text
-https://your-tunnel.example/webhooks/github
-```
-
-Health check:
-
-```bash
-curl http://localhost:3000/healthz
-```
-
-## Deploy to Vercel
-
-This project includes a Vercel Function at `api/github/webhooks.ts` and a rewrite from `/webhooks/github` to `/api/github/webhooks`.
-
-1. Import this repository into Vercel.
-2. Add the required environment variables in Vercel Project Settings.
-3. Deploy.
-4. Set the GitHub App webhook URL to:
-
-```text
-https://your-project.vercel.app/webhooks/github
-```
-
-For local Vercel testing:
-
-```bash
-npm run dev:vercel
-```
-
-Vercel serverless functions have execution time limits. For large PRs, keep `MAX_PATCH_CHARS` conservative or upgrade the function duration in `vercel.json`.
-
-## Self-hosted production
-
-```bash
-npm install
 npm run build
-npm start
+npm run typecheck
 ```
 
-`npm start` runs `node dist/src/server.js`.
+To simulate the workflow locally, export the same env vars that the GitHub Action uses and run:
 
-Run it behind HTTPS. GitHub webhooks must reach `/webhooks/github`, and the app must keep the private key and webhook secret out of source control.
+```bash
+node dist/src/actions/runReview.js
+```
+
+You must also provide:
+
+- `GITHUB_EVENT_NAME`
+- `GITHUB_EVENT_PATH`
+- `GITHUB_TOKEN`
+
+## Configuration
+
+See [.env.example](/Users/home/Projects/ghbot/.env.example:1) for local testing values.
+
+Important variables:
+
+- `GITHUB_TOKEN`: GitHub token used by the workflow or local simulation
+- `OPENAI_API_KEY`: API key for the reviewer model
+- `OPENAI_BASE_URL`: optional OpenAI-compatible API base URL
+- `OPENAI_MODEL`: defaults to `gpt-4.1`
+- `OPENAI_REASONING_EFFORT`: optional reasoning effort, one of `low`, `medium`, or `high`
+- `BOT_NAME`: defaults to `ghbot`, but the workflow sets it to `github-actions[bot]`
+- `LENIENT_APPROVAL_USER`: defaults to `lezi-fun`
+- `AUTO_MERGE`: defaults to `false`
+- `MERGE_METHOD`: defaults to `squash`
+- `REQUIRE_CHECKS`: defaults to `true`
+- `MAX_PATCH_CHARS`: defaults to `120000`
 
 ## Safety notes
 
 Start with `AUTO_MERGE=false`. Let the bot comment and approve first, then enable auto-merge after you trust the behavior on your repositories.
 
 This bot does not execute untrusted PR code. It reviews diffs and checks GitHub check/status results. Keep repository branch protection enabled so required CI and human override rules still apply.
-
-## Open source release checklist
-
-- Replace the copyright holder in `LICENSE` if needed.
-- Create a GitHub repository.
-- Push this code.
-- Configure repository secrets only in GitHub/Vercel, never in source control.
-- Keep branch protection enabled on `main`.

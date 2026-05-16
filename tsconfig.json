@@ -10,5 +10,6 @@
     "outDir": "dist",
     "rootDir": "."
   },
-  "include": ["src/**/*.ts", "api/**/*.ts"]
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/server.ts", "src/github/app.ts", "src/github/webhookHandler.ts", "api/**/*.ts"]
 }
