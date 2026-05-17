@@ -385,7 +385,7 @@ async function maybeMergePullRequest(
             owner,
             repo,
             issue_number: pullNumber,
-            body: `Lenient check passed, but this PR will not be merged until ${approvalRequirement} approves the current head commit.`
+            body: `Lenient check passed, but this PR will not be merged until ${approvalRequirement} approves the current head commit.\n\nNext step: in the GitHub pull request UI, click "Review changes" and submit an "Approve" review. No extra command is needed.`
           });
         });
       }
