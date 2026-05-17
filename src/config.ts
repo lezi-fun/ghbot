@@ -29,6 +29,15 @@ const envBoolean = z.preprocess((value) => {
 const configSchema = z.object({
   port: z.coerce.number().int().positive().default(3000),
   githubToken: z.string().min(1),
+  githubAppId: optionalString,
+  githubAppPrivateKey: optionalString,
+  githubAppInstallationId: z.preprocess((value) => {
+    if (value === "" || value === undefined) {
+      return undefined;
+    }
+
+    return value;
+  }, z.coerce.number().int().positive().optional()),
   codexModel: optionalString.default("gpt-5.4"),
   codexReasoningEffort: z.preprocess((value) => {
     return value === "" ? undefined : value;
@@ -46,6 +55,9 @@ const configSchema = z.object({
 export const config = configSchema.parse({
   port: process.env.PORT,
   githubToken: process.env.GITHUB_TOKEN,
+  githubAppId: process.env.GITHUB_APP_ID,
+  githubAppPrivateKey: process.env.GITHUB_APP_PRIVATE_KEY,
+  githubAppInstallationId: process.env.GITHUB_APP_INSTALLATION_ID,
   codexModel: process.env.CODEX_MODEL,
   codexReasoningEffort: process.env.CODEX_REASONING_EFFORT,
   codexBaseUrl: process.env.CODEX_BASE_URL,

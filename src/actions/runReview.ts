@@ -68,7 +68,11 @@ async function main(): Promise<void> {
   const payload = workflowCallEventName
     ? buildPayloadFromWorkflowCallEnv(workflowCallEventName)
     : readPayloadFromGitHubEventPath();
-  const octokit = createGitHubClient();
+  const repository = payload.repository;
+  const octokit = await createGitHubClient({
+    owner: repository.owner.login,
+    repo: repository.name
+  });
   const eventName = workflowCallEventName ?? process.env.GITHUB_EVENT_NAME;
 
   if (!eventName) {
