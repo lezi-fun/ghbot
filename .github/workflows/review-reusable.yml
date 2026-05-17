@@ -96,17 +96,26 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          repository: lezi-fun/ghbot
+          ref: main
+          path: ghbot-runtime
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
+          cache-dependency-path: ghbot-runtime/package-lock.json
       - name: Install Codex CLI
         run: npm install -g @openai/codex
       - run: npm ci
+        working-directory: ghbot-runtime
       - run: npm run build
+        working-directory: ghbot-runtime
       - name: Remove stale review result
         run: rm -f .review-result.json
+        working-directory: ghbot-runtime
       - run: node dist/src/actions/runReview.js
+        working-directory: ghbot-runtime
         env:
           GITHUB_TOKEN: ${{ github.token }}
           CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
@@ -135,17 +144,26 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          repository: lezi-fun/ghbot
+          ref: main
+          path: ghbot-runtime
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
+          cache-dependency-path: ghbot-runtime/package-lock.json
       - name: Install Codex CLI
         run: npm install -g @openai/codex
       - run: npm ci
+        working-directory: ghbot-runtime
       - run: npm run build
+        working-directory: ghbot-runtime
       - name: Remove stale review result
         run: rm -f .review-result.json
+        working-directory: ghbot-runtime
       - run: node dist/src/actions/runReview.js
+        working-directory: ghbot-runtime
         env:
           GITHUB_TOKEN: ${{ github.token }}
           CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
