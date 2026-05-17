@@ -83,8 +83,74 @@ export async function processPullRequest(octokit: Octokit, ref: PullRequestRef, 
     pullNumber,
     title: pullRequest.title,
     headSha: pullRequest.head.sha,
-    mode
+    mode,
+    emitStatusComments: true
   });
+}
+
+export async function processScheduledLenientMerges(
+  octokit: Octokit,
+  params: {
+    owner: string;
+    repo: string;
+  }
+): Promise<void> {
+  if (!config.autoMerge) {
+    logger.info({ owner: params.owner, repo: params.repo }, "Skipping scheduled lenient recheck because AUTO_MERGE is disabled.");
+    return;
+  }
+
+  const pullRequests = await octokit.paginate(octokit.rest.pulls.list, {
+    owner: params.owner,
+    repo: params.repo,
+    state: "open",
+    per_page: 100
+  });
+
+  for (const pullRequest of pullRequests) {
+    if (pullRequest.draft) {
+      continue;
+    }
+
+    const hasSuccessfulLenientReview = await hasSuccessfulLenientReviewForHead(octokit, {
+      owner: params.owner,
+      repo: params.repo,
+      pullNumber: pullRequest.number,
+      headSha: pullRequest.head.sha
+    });
+
+    if (!hasSuccessfulLenientReview) {
+      continue;
+    }
+
+    const adminRecentlyResponded = await hasRecentAdminResponse(octokit, {
+      owner: params.owner,
+      repo: params.repo,
+      pullNumber: pullRequest.number
+    });
+
+    const approvedByEligibleReviewer = await hasCurrentHeadApprovalFrom(octokit, {
+      owner: params.owner,
+      repo: params.repo,
+      pullNumber: pullRequest.number,
+      headSha: pullRequest.head.sha,
+      requireAdmin: adminRecentlyResponded
+    });
+
+    if (!approvedByEligibleReviewer) {
+      continue;
+    }
+
+    await maybeMergePullRequest(octokit, {
+      owner: params.owner,
+      repo: params.repo,
+      pullNumber: pullRequest.number,
+      title: pullRequest.title,
+      headSha: pullRequest.head.sha,
+      mode: "lenient",
+      emitStatusComments: false
+    });
+  }
 }
 
 export async function processPullRequestReviewApproval(
@@ -153,13 +219,19 @@ export async function processPullRequestReviewApproval(
     owner: params.owner,
     repo: params.repo,
     username: params.reviewerLogin
+  }).catch((error: unknown) => {
+    if (isNotFoundError(error)) {
+      return { data: { permission: null } };
+    }
+
+    throw error;
   });
 
   const allowedPermissions = adminRecentlyResponded
     ? new Set(["admin"])
     : new Set(["admin", "maintain", "write"]);
 
-  if (!allowedPermissions.has(permission.permission)) {
+  if (!permission.permission || !allowedPermissions.has(permission.permission)) {
     logger.info(
       {
         owner: params.owner,
@@ -180,7 +252,8 @@ export async function processPullRequestReviewApproval(
     pullNumber: params.pullNumber,
     title: pullRequest.title,
     headSha: pullRequest.head.sha,
-    mode: "lenient"
+    mode: "lenient",
+    emitStatusComments: true
   });
 }
 
@@ -208,13 +281,19 @@ export async function processLenientCheckComment(
     owner: params.owner,
     repo: params.repo,
     username: params.commenterLogin
+  }).catch((error: unknown) => {
+    if (isNotFoundError(error)) {
+      return { data: { permission: null } };
+    }
+
+    throw error;
   });
 
   const allowedPermissions = adminRecentlyResponded
     ? new Set(["admin"])
     : new Set(["admin", "maintain", "write"]);
 
-  if (!allowedPermissions.has(permission.permission)) {
+  if (!permission.permission || !allowedPermissions.has(permission.permission)) {
     logger.info(
       {
         owner: params.owner,
@@ -270,6 +349,7 @@ async function maybeMergePullRequest(
     title: string;
     headSha: string;
     mode: ReviewMode;
+    emitStatusComments: boolean;
   }
 ): Promise<void> {
   const { owner, repo, pullNumber } = params;
@@ -299,14 +379,16 @@ async function maybeMergePullRequest(
     });
 
     if (!approvedByEligibleReviewer) {
-      await withRetry("github.issues.createComment.awaitLenientApproval", async () => {
-        return octokit.rest.issues.createComment({
-          owner,
-          repo,
-          issue_number: pullNumber,
-          body: `Lenient check passed, but this PR will not be merged until ${approvalRequirement} approves the current head commit.`
+      if (params.emitStatusComments) {
+        await withRetry("github.issues.createComment.awaitLenientApproval", async () => {
+          return octokit.rest.issues.createComment({
+            owner,
+            repo,
+            issue_number: pullNumber,
+            body: `Lenient check passed, but this PR will not be merged until ${approvalRequirement} approves the current head commit.`
+          });
         });
-      });
+      }
       logger.info({ owner, repo, pullNumber, adminRecentlyResponded }, "Waiting for eligible lenient approval before merging.");
       return;
     }
@@ -314,14 +396,16 @@ async function maybeMergePullRequest(
 
   const mergeablePullRequest = await waitForMergeable(octokit, owner, repo, pullNumber);
   if (mergeablePullRequest.mergeable !== true || mergeablePullRequest.mergeable_state === "dirty") {
-    await withRetry("github.issues.createComment.notMergeable", async () => {
-      return octokit.rest.issues.createComment({
-        owner,
-        repo,
-        issue_number: pullNumber,
-        body: `Automated review approved this PR, but it was not merged because GitHub reports mergeable=${mergeablePullRequest.mergeable} and mergeable_state=${mergeablePullRequest.mergeable_state}.`
+    if (params.emitStatusComments) {
+      await withRetry("github.issues.createComment.notMergeable", async () => {
+        return octokit.rest.issues.createComment({
+          owner,
+          repo,
+          issue_number: pullNumber,
+          body: `Automated review approved this PR, but it was not merged because GitHub reports mergeable=${mergeablePullRequest.mergeable} and mergeable_state=${mergeablePullRequest.mergeable_state}.`
+        });
       });
-    });
+    }
     return;
   }
 
@@ -332,14 +416,16 @@ async function maybeMergePullRequest(
       ref: params.headSha
     });
     if (!checks.ok) {
-      await withRetry("github.issues.createComment.requiredChecks", async () => {
-        return octokit.rest.issues.createComment({
-          owner,
-          repo,
-          issue_number: pullNumber,
-          body: `Automated review approved this PR, but it was not merged because required checks are not green. ${checks.reason ?? ""}`.trim()
+      if (params.emitStatusComments) {
+        await withRetry("github.issues.createComment.requiredChecks", async () => {
+          return octokit.rest.issues.createComment({
+            owner,
+            repo,
+            issue_number: pullNumber,
+            body: `Automated review approved this PR, but it was not merged because required checks are not green. ${checks.reason ?? ""}`.trim()
+          });
         });
-      });
+      }
       return;
     }
   }
@@ -383,7 +469,17 @@ async function hasCurrentHeadApprovalFrom(
         owner: params.owner,
         repo: params.repo,
         username: login
+      }).catch((error: unknown) => {
+        if (isNotFoundError(error)) {
+          return { data: { permission: null } };
+        }
+
+        throw error;
       });
+
+      if (!permission.permission) {
+        continue;
+      }
 
       if (params.requireAdmin) {
         if (permission.permission === "admin") {
@@ -410,6 +506,10 @@ async function hasCurrentHeadApprovalFrom(
   }
 
   return false;
+}
+
+function isNotFoundError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "status" in error && error.status === 404;
 }
 
 async function hasSuccessfulLenientReviewForHead(

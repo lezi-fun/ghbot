@@ -6,6 +6,7 @@ import { withRetry } from "../retry.js";
 import {
   processLenientCheckComment,
   processPullRequest,
+  processScheduledLenientMerges,
   processPullRequestReviewApproval
 } from "../review/processor.js";
 
@@ -55,6 +56,10 @@ type PullRequestReviewPayload = {
   pull_request: {
     number: number;
   };
+  repository: GitHubRepository;
+};
+
+type ScheduledPayload = {
   repository: GitHubRepository;
 };
 
@@ -133,19 +138,28 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (eventName === "schedule") {
+    const scheduledPayload = payload as ScheduledPayload;
+    await processScheduledLenientMerges(octokit, {
+      owner: scheduledPayload.repository.owner.login,
+      repo: scheduledPayload.repository.name
+    });
+    return;
+  }
+
   logger.warn({ eventName }, "Unhandled GitHub Actions event.");
 }
 
-function readPayloadFromGitHubEventPath(): PullRequestPayload | IssueCommentPayload | PullRequestReviewPayload {
+function readPayloadFromGitHubEventPath(): PullRequestPayload | IssueCommentPayload | PullRequestReviewPayload | ScheduledPayload {
   const eventPath = process.env.GITHUB_EVENT_PATH;
   if (!eventPath) {
     throw new Error("GITHUB_EVENT_PATH is required when workflow_call inputs are not provided.");
   }
 
-  return JSON.parse(fs.readFileSync(eventPath, "utf8")) as PullRequestPayload | IssueCommentPayload | PullRequestReviewPayload;
+  return JSON.parse(fs.readFileSync(eventPath, "utf8")) as PullRequestPayload | IssueCommentPayload | PullRequestReviewPayload | ScheduledPayload;
 }
 
-function buildPayloadFromWorkflowCallEnv(eventName: string): PullRequestPayload | IssueCommentPayload | PullRequestReviewPayload {
+function buildPayloadFromWorkflowCallEnv(eventName: string): PullRequestPayload | IssueCommentPayload | PullRequestReviewPayload | ScheduledPayload {
   const action = process.env.GHBOT_EVENT_ACTION;
   const owner = process.env.GHBOT_REPOSITORY_OWNER;
   const repo = process.env.GHBOT_REPOSITORY_NAME;
@@ -206,6 +220,12 @@ function buildPayloadFromWorkflowCallEnv(eventName: string): PullRequestPayload 
       pull_request: {
         number: pullNumber
       },
+      repository
+    };
+  }
+
+  if (eventName === "schedule") {
+    return {
       repository
     };
   }

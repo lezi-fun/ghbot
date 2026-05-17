@@ -13,6 +13,7 @@ GitHub Actions bot that reviews pull requests by calling Codex CLI, leaves inlin
   - `suggestion` findings are included as non-blocking suggestions.
 - Supports a lenient pass when a repository administrator comments `/lenient-check`.
 - If no repository administrator has commented or reviewed within the last 24 hours, the lenient trigger automatically broadens to users with `write`, `maintain`, or `admin` permission.
+- A scheduled recheck runs hourly so the 24-hour fallback can take effect even if no new PR event arrives after the window expires.
 - In lenient mode, only blocks dangerous changes, runtime-impacting issues, errors, crashes, broken builds, data-loss risks, and security risks.
 - A PR that passes lenient mode is not auto-merged until an eligible reviewer approves the current head commit.
 - Eligible reviewers for lenient merge approval are:
@@ -141,6 +142,7 @@ Approval eligibility follows the same rule as lenient triggering:
 
 - if a repository administrator has commented or reviewed on that PR within the last 24 hours, only an administrator approval can unlock merge
 - otherwise any user with `write`, `maintain`, or `admin` permission can unlock merge
+- an hourly scheduled recheck reevaluates this fallback window for already-approved PRs
 
 ## Local development
 

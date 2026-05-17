@@ -13,6 +13,8 @@ on:
   pull_request_review:
     types:
       - submitted
+  schedule:
+    - cron: "17 * * * *"
 
 permissions:
   contents: write
@@ -50,3 +52,24 @@ jobs:
       require_checks: ${{ vars.REQUIRE_CHECKS || 'true' }}
       max_patch_chars: ${{ vars.MAX_PATCH_CHARS || '120000' }}
       log_level: info
+  review-schedule-recheck:
+    if: github.event_name == 'schedule'
+    uses: ./.github/workflows/review-reusable.yml
+    secrets:
+      CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+    with:
+      event_name: schedule
+      event_action: schedule
+      repository_owner: ${{ github.repository_owner }}
+      repository_name: ${{ github.event.repository.name }}
+      pull_number: "1"
+      bot_name: github-actions[bot]
+      codex_base_url: ${{ vars.CODEX_BASE_URL || 'https://api.openai.com/v1' }}
+      codex_model: ${{ vars.CODEX_MODEL || 'gpt-5.4' }}
+      codex_reasoning_effort: ${{ vars.CODEX_REASONING_EFFORT || 'high' }}
+      auto_merge: ${{ vars.AUTO_MERGE || 'false' }}
+      merge_method: ${{ vars.MERGE_METHOD || 'squash' }}
+      require_checks: ${{ vars.REQUIRE_CHECKS || 'true' }}
+      max_patch_chars: ${{ vars.MAX_PATCH_CHARS || '120000' }}
+      log_level: info
+      run_schedule_recheck: "true"

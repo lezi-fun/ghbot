@@ -74,6 +74,10 @@ on:
         required: false
         type: string
         default: info
+      run_schedule_recheck:
+        required: false
+        type: string
+        default: "false"
     secrets:
       CODEX_API_KEY:
         required: true
@@ -88,6 +92,7 @@ permissions:
 jobs:
   review:
     name: bot-review
+    if: ${{ inputs.run_schedule_recheck != 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -124,3 +129,37 @@ jobs:
           GHBOT_REVIEWER_LOGIN: ${{ inputs.reviewer_login }}
           GHBOT_REVIEW_STATE: ${{ inputs.review_state }}
           GHBOT_REVIEW_COMMIT_ID: ${{ inputs.review_commit_id }}
+  schedule-recheck:
+    name: bot-schedule-recheck
+    if: ${{ inputs.run_schedule_recheck == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install Codex CLI
+        run: npm install -g @openai/codex
+      - run: npm ci
+      - run: npm run build
+      - name: Remove stale review result
+        run: rm -f .review-result.json
+      - run: node dist/src/actions/runReview.js
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+          CODEX_BASE_URL: ${{ inputs.codex_base_url }}
+          CODEX_MODEL: ${{ inputs.codex_model }}
+          CODEX_REASONING_EFFORT: ${{ inputs.codex_reasoning_effort }}
+          BOT_NAME: ${{ inputs.bot_name }}
+          AUTO_MERGE: ${{ inputs.auto_merge }}
+          MERGE_METHOD: ${{ inputs.merge_method }}
+          REQUIRE_CHECKS: ${{ inputs.require_checks }}
+          MAX_PATCH_CHARS: ${{ inputs.max_patch_chars }}
+          LOG_LEVEL: ${{ inputs.log_level }}
+          GHBOT_EVENT_NAME: schedule
+          GHBOT_EVENT_ACTION: schedule
+          GHBOT_REPOSITORY_OWNER: ${{ inputs.repository_owner }}
+          GHBOT_REPOSITORY_NAME: ${{ inputs.repository_name }}
+          GHBOT_PULL_NUMBER: "1"
