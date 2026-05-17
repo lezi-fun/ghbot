@@ -189,32 +189,35 @@ async function runCodexExec(args: string[], extraEnv: Record<string, string>): P
   });
 }
 
-const SENSITIVE_ENV_KEYS = [
-  "GITHUB_TOKEN",
-  "GITHUB_APP_ID",
-  "GITHUB_APP_PRIVATE_KEY",
-  "GITHUB_APP_INSTALLATION_ID"
-] as const;
-
 function buildCodexChildEnv(extraEnv: Record<string, string>): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    ...extraEnv
-  };
+  const env: NodeJS.ProcessEnv = {};
 
-  for (const key of SENSITIVE_ENV_KEYS) {
-    delete env[key];
-  }
+  copyEnv(env, "PATH");
+  copyEnv(env, "HOME");
+  copyEnv(env, "USER");
+  copyEnv(env, "SHELL");
+  copyEnv(env, "TMPDIR");
+  copyEnv(env, "TMP");
+  copyEnv(env, "TEMP");
+  copyEnv(env, "LANG");
+  copyEnv(env, "LC_ALL");
+  copyEnv(env, "TERM");
+  copyEnv(env, "NO_COLOR");
+  copyEnv(env, "FORCE_COLOR");
+  copyEnv(env, "CI");
 
   for (const [key, value] of Object.entries(extraEnv)) {
-    if (SENSITIVE_ENV_KEYS.includes(key as (typeof SENSITIVE_ENV_KEYS)[number])) {
-      continue;
-    }
-
     env[key] = value;
   }
 
   return env;
+}
+
+function copyEnv(target: NodeJS.ProcessEnv, key: string): void {
+  const value = process.env[key];
+  if (value !== undefined) {
+    target[key] = value;
+  }
 }
 
 function streamProcessOutput(stream: "stdout" | "stderr", text: string): void {
