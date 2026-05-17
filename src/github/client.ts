@@ -47,7 +47,7 @@ export async function createGitHubClient(params?: {
 
   if (!config.githubToken) {
     throw new Error(
-      "GitHub authentication is not configured. Provide GITHUB_TOKEN, or set GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY."
+      "GitHub authentication is not configured. Provide GITHUB_TOKEN, or set GH_APP_ID and GH_APP_PRIVATE_KEY."
     );
   }
 

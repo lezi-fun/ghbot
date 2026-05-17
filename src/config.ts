@@ -55,9 +55,9 @@ const configSchema = z.object({
 export const config = configSchema.parse({
   port: process.env.PORT,
   githubToken: process.env.GITHUB_TOKEN,
-  githubAppId: process.env.GITHUB_APP_ID,
-  githubAppPrivateKey: process.env.GITHUB_APP_PRIVATE_KEY,
-  githubAppInstallationId: process.env.GITHUB_APP_INSTALLATION_ID,
+  githubAppId: process.env.GH_APP_ID ?? process.env.GITHUB_APP_ID,
+  githubAppPrivateKey: process.env.GH_APP_PRIVATE_KEY ?? process.env.GITHUB_APP_PRIVATE_KEY,
+  githubAppInstallationId: process.env.GH_APP_INSTALLATION_ID ?? process.env.GITHUB_APP_INSTALLATION_ID,
   codexModel: process.env.CODEX_MODEL,
   codexReasoningEffort: process.env.CODEX_REASONING_EFFORT,
   codexBaseUrl: process.env.CODEX_BASE_URL,

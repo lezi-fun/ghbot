@@ -35,9 +35,9 @@ Add these repository secrets:
 
 - `CODEX_API_KEY`
 - Optional for GitHub App identity:
-  - `GITHUB_APP_ID`
-  - `GITHUB_APP_PRIVATE_KEY`
-  - `GITHUB_APP_INSTALLATION_ID`
+  - `GH_APP_ID`
+  - `GH_APP_PRIVATE_KEY`
+  - `GH_APP_INSTALLATION_ID`
 
 Optional repository variables:
 
@@ -74,13 +74,14 @@ You only need this if you want the bot to act as your GitHub App instead of `git
 5. Create and download the private key
 6. Install the App on the target repository
 7. In the target repository, add these Actions secrets:
-   - `GITHUB_APP_ID`: the numeric App ID
-   - `GITHUB_APP_PRIVATE_KEY`: the full PEM private key content
-   - Optional `GITHUB_APP_INSTALLATION_ID`: the numeric installation ID
+   - `GH_APP_ID`: the numeric App ID
+   - `GH_APP_PRIVATE_KEY`: the full PEM private key content
+   - Optional `GH_APP_INSTALLATION_ID`: the numeric installation ID
 
 Notes:
 
-- `GITHUB_APP_INSTALLATION_ID` is optional. ghbot can resolve it automatically from the repository if the App is installed there.
+- GitHub Actions secrets and variables cannot start with `GITHUB_`, so use the `GH_APP_*` names above in repository settings.
+- `GH_APP_INSTALLATION_ID` is optional. ghbot can resolve it automatically from the repository if the App is installed there.
 - Keep `CODEX_API_KEY` as a separate secret. The App only replaces GitHub write identity; it does not replace Codex authentication.
 - The repository still gets `github.token` automatically from GitHub Actions, and ghbot uses it as a fallback if App authentication is unavailable or broken.
 
@@ -121,9 +122,9 @@ jobs:
     uses: lezi-fun/ghbot/.github/workflows/review-reusable.yml@main
     secrets:
       CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
-      GITHUB_APP_ID: ${{ secrets.GITHUB_APP_ID }}
-      GITHUB_APP_PRIVATE_KEY: ${{ secrets.GITHUB_APP_PRIVATE_KEY }}
-      GITHUB_APP_INSTALLATION_ID: ${{ secrets.GITHUB_APP_INSTALLATION_ID }}
+      GH_APP_ID: ${{ secrets.GH_APP_ID }}
+      GH_APP_PRIVATE_KEY: ${{ secrets.GH_APP_PRIVATE_KEY }}
+      GH_APP_INSTALLATION_ID: ${{ secrets.GH_APP_INSTALLATION_ID }}
     with:
       event_name: ${{ github.event_name }}
       event_action: ${{ github.event.action }}
@@ -149,7 +150,7 @@ jobs:
 The caller repository still needs to configure:
 
 - `CODEX_API_KEY` as a secret
-- optional `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, and `GITHUB_APP_INSTALLATION_ID` secrets if you want GitHub App identity
+- optional `GH_APP_ID`, `GH_APP_PRIVATE_KEY`, and `GH_APP_INSTALLATION_ID` secrets if you want GitHub App identity
 - `CODEX_BASE_URL`, `CODEX_MODEL`, `CODEX_REASONING_EFFORT`, `AUTO_MERGE`, `MERGE_METHOD`, `REQUIRE_CHECKS`, and `MAX_PATCH_CHARS` as repository variables as needed
 
 ## Required workflow permissions
@@ -202,7 +203,7 @@ You must also provide:
 
 - `GITHUB_EVENT_NAME`
 - `GITHUB_EVENT_PATH`
-- either `GITHUB_TOKEN`, or `GITHUB_APP_ID` plus `GITHUB_APP_PRIVATE_KEY`
+- either `GITHUB_TOKEN`, or `GH_APP_ID` plus `GH_APP_PRIVATE_KEY`
 
 ## Configuration
 
@@ -211,9 +212,9 @@ See [.env.example](/Users/home/Projects/ghbot/.env.example:1) for local testing 
 Important variables:
 
 - `GITHUB_TOKEN`: optional in GitHub Actions because `github.token` is automatic; still useful for local simulation or as a fallback
-- `GITHUB_APP_ID`: optional GitHub App ID
-- `GITHUB_APP_PRIVATE_KEY`: optional GitHub App private key
-- `GITHUB_APP_INSTALLATION_ID`: optional GitHub App installation ID
+- `GH_APP_ID`: optional GitHub App ID
+- `GH_APP_PRIVATE_KEY`: optional GitHub App private key
+- `GH_APP_INSTALLATION_ID`: optional GitHub App installation ID
 - `CODEX_API_KEY`: API key used by Codex CLI
 - `CODEX_BASE_URL`: optional Codex/OpenAI-compatible base URL
 - `CODEX_MODEL`: defaults to `gpt-5.4`
