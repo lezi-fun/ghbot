@@ -32,6 +32,9 @@ jobs:
     uses: ./.github/workflows/review-reusable.yml
     secrets:
       CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+      GITHUB_APP_ID: ${{ secrets.GITHUB_APP_ID }}
+      GITHUB_APP_PRIVATE_KEY: ${{ secrets.GITHUB_APP_PRIVATE_KEY }}
+      GITHUB_APP_INSTALLATION_ID: ${{ secrets.GITHUB_APP_INSTALLATION_ID }}
     with:
       event_name: ${{ github.event_name }}
       event_action: ${{ github.event.action }}
@@ -57,6 +60,9 @@ jobs:
     uses: ./.github/workflows/review-reusable.yml
     secrets:
       CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+      GITHUB_APP_ID: ${{ secrets.GITHUB_APP_ID }}
+      GITHUB_APP_PRIVATE_KEY: ${{ secrets.GITHUB_APP_PRIVATE_KEY }}
+      GITHUB_APP_INSTALLATION_ID: ${{ secrets.GITHUB_APP_INSTALLATION_ID }}
     with:
       event_name: schedule
       event_action: schedule

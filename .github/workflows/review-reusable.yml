@@ -81,6 +81,12 @@ on:
     secrets:
       CODEX_API_KEY:
         required: true
+      GITHUB_APP_ID:
+        required: false
+      GITHUB_APP_PRIVATE_KEY:
+        required: false
+      GITHUB_APP_INSTALLATION_ID:
+        required: false
 
 permissions:
   contents: write
@@ -119,6 +125,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+          GITHUB_APP_ID: ${{ secrets.GITHUB_APP_ID }}
+          GITHUB_APP_PRIVATE_KEY: ${{ secrets.GITHUB_APP_PRIVATE_KEY }}
+          GITHUB_APP_INSTALLATION_ID: ${{ secrets.GITHUB_APP_INSTALLATION_ID }}
           CODEX_BASE_URL: ${{ inputs.codex_base_url }}
           CODEX_MODEL: ${{ inputs.codex_model }}
           CODEX_REASONING_EFFORT: ${{ inputs.codex_reasoning_effort }}
@@ -167,6 +176,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+          GITHUB_APP_ID: ${{ secrets.GITHUB_APP_ID }}
+          GITHUB_APP_PRIVATE_KEY: ${{ secrets.GITHUB_APP_PRIVATE_KEY }}
+          GITHUB_APP_INSTALLATION_ID: ${{ secrets.GITHUB_APP_INSTALLATION_ID }}
           CODEX_BASE_URL: ${{ inputs.codex_base_url }}
           CODEX_MODEL: ${{ inputs.codex_model }}
           CODEX_REASONING_EFFORT: ${{ inputs.codex_reasoning_effort }}

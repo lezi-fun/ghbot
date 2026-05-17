@@ -34,6 +34,10 @@ GitHub Actions bot that reviews pull requests by calling Codex CLI, leaves inlin
 Add these repository secrets:
 
 - `CODEX_API_KEY`
+- Optional for GitHub App identity:
+  - `GITHUB_APP_ID`
+  - `GITHUB_APP_PRIVATE_KEY`
+  - `GITHUB_APP_INSTALLATION_ID`
 
 Optional repository variables:
 
@@ -45,8 +49,40 @@ Optional repository variables:
 - `REQUIRE_CHECKS`: defaults to `true`
 - `MAX_PATCH_CHARS`: defaults to `120000`
 
-The workflow uses the repository `GITHUB_TOKEN`, so you do not need a GitHub App, webhook endpoint, Vercel deployment, or a self-hosted listener.
+The workflow automatically receives `github.token` from GitHub Actions, so you do not need to create a repository secret named `GITHUB_TOKEN`.
+If you do nothing else, ghbot uses that workflow token for comments, reviews, checks, and merges.
+If you configure a GitHub App, ghbot prefers the App installation token for those GitHub write operations and falls back to the workflow token if App auth fails.
 It installs Codex CLI inside the GitHub Actions runner and uses that CLI for the review itself. The workflow writes an isolated Codex `config.toml` at runtime with the configured model, provider base URL, and reasoning setting, then asks Codex CLI to persist its final review result into `.review-result.json`.
+
+## GitHub App setup
+
+You only need this if you want the bot to act as your GitHub App instead of `github-actions[bot]`.
+
+1. Create a GitHub App at `Settings -> Developer settings -> GitHub Apps -> New GitHub App`
+2. Recommended fields:
+   - `GitHub App name`: any unique name, for example `ghbot`
+   - `Homepage URL`: your repository URL or project URL
+   - `Webhook`: disabled, this workflow-based setup does not need a webhook
+3. App permissions:
+   - Repository permissions:
+     - `Contents`: `Read and write`
+     - `Pull requests`: `Read and write`
+     - `Checks`: `Read and write`
+     - `Issues`: `Read and write`
+     - `Metadata`: `Read-only`
+4. Subscribe to no webhook events unless you need them for something else
+5. Create and download the private key
+6. Install the App on the target repository
+7. In the target repository, add these Actions secrets:
+   - `GITHUB_APP_ID`: the numeric App ID
+   - `GITHUB_APP_PRIVATE_KEY`: the full PEM private key content
+   - Optional `GITHUB_APP_INSTALLATION_ID`: the numeric installation ID
+
+Notes:
+
+- `GITHUB_APP_INSTALLATION_ID` is optional. ghbot can resolve it automatically from the repository if the App is installed there.
+- Keep `CODEX_API_KEY` as a separate secret. The App only replaces GitHub write identity; it does not replace Codex authentication.
+- The repository still gets `github.token` automatically from GitHub Actions, and ghbot uses it as a fallback if App authentication is unavailable or broken.
 
 ## Reuse from another repository
 
@@ -85,6 +121,9 @@ jobs:
     uses: lezi-fun/ghbot/.github/workflows/review-reusable.yml@main
     secrets:
       CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+      GITHUB_APP_ID: ${{ secrets.GITHUB_APP_ID }}
+      GITHUB_APP_PRIVATE_KEY: ${{ secrets.GITHUB_APP_PRIVATE_KEY }}
+      GITHUB_APP_INSTALLATION_ID: ${{ secrets.GITHUB_APP_INSTALLATION_ID }}
     with:
       event_name: ${{ github.event_name }}
       event_action: ${{ github.event.action }}
@@ -110,6 +149,7 @@ jobs:
 The caller repository still needs to configure:
 
 - `CODEX_API_KEY` as a secret
+- optional `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, and `GITHUB_APP_INSTALLATION_ID` secrets if you want GitHub App identity
 - `CODEX_BASE_URL`, `CODEX_MODEL`, `CODEX_REASONING_EFFORT`, `AUTO_MERGE`, `MERGE_METHOD`, `REQUIRE_CHECKS`, and `MAX_PATCH_CHARS` as repository variables as needed
 
 ## Required workflow permissions
@@ -162,7 +202,7 @@ You must also provide:
 
 - `GITHUB_EVENT_NAME`
 - `GITHUB_EVENT_PATH`
-- `GITHUB_TOKEN`
+- either `GITHUB_TOKEN`, or `GITHUB_APP_ID` plus `GITHUB_APP_PRIVATE_KEY`
 
 ## Configuration
 
@@ -170,7 +210,10 @@ See [.env.example](/Users/home/Projects/ghbot/.env.example:1) for local testing 
 
 Important variables:
 
-- `GITHUB_TOKEN`: GitHub token used by the workflow or local simulation
+- `GITHUB_TOKEN`: optional in GitHub Actions because `github.token` is automatic; still useful for local simulation or as a fallback
+- `GITHUB_APP_ID`: optional GitHub App ID
+- `GITHUB_APP_PRIVATE_KEY`: optional GitHub App private key
+- `GITHUB_APP_INSTALLATION_ID`: optional GitHub App installation ID
 - `CODEX_API_KEY`: API key used by Codex CLI
 - `CODEX_BASE_URL`: optional Codex/OpenAI-compatible base URL
 - `CODEX_MODEL`: defaults to `gpt-5.4`
