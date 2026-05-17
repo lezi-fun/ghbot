@@ -98,7 +98,7 @@ export async function processPullRequestReviewApproval(
     commitId: string;
   }
 ): Promise<void> {
-  if (params.state !== "approved" || params.reviewerLogin !== config.lenientApprovalUser) {
+  if (params.state !== "approved") {
     return;
   }
 
@@ -118,6 +118,37 @@ export async function processPullRequestReviewApproval(
         currentHead: pullRequest.head.sha
       },
       "Ignoring approval because it does not match the current PR head."
+    );
+    return;
+  }
+
+  const adminRecentlyResponded = await hasRecentAdminResponse(octokit, {
+    owner: params.owner,
+    repo: params.repo,
+    pullNumber: params.pullNumber
+  });
+
+  const { data: permission } = await octokit.rest.repos.getCollaboratorPermissionLevel({
+    owner: params.owner,
+    repo: params.repo,
+    username: params.reviewerLogin
+  });
+
+  const allowedPermissions = adminRecentlyResponded
+    ? new Set(["admin"])
+    : new Set(["admin", "maintain", "write"]);
+
+  if (!allowedPermissions.has(permission.permission)) {
+    logger.info(
+      {
+        owner: params.owner,
+        repo: params.repo,
+        pullNumber: params.pullNumber,
+        reviewerLogin: params.reviewerLogin,
+        permission: permission.permission,
+        adminRecentlyResponded
+      },
+      "Ignoring lenient approval because reviewer does not meet the current permission threshold."
     );
     return;
   }
@@ -228,24 +259,34 @@ async function maybeMergePullRequest(
   }
 
   if (params.mode === "lenient") {
-    const approvedByOwner = await hasCurrentHeadApprovalFrom(octokit, {
+    const adminRecentlyResponded = await hasRecentAdminResponse(octokit, {
+      owner,
+      repo,
+      pullNumber
+    });
+
+    const approvalRequirement = adminRecentlyResponded
+      ? "a repository administrator"
+      : "a repository user with write permission or above";
+
+    const approvedByEligibleReviewer = await hasCurrentHeadApprovalFrom(octokit, {
       owner,
       repo,
       pullNumber,
       headSha: params.headSha,
-      reviewerLogin: config.lenientApprovalUser
+      requireAdmin: adminRecentlyResponded
     });
 
-    if (!approvedByOwner) {
+    if (!approvedByEligibleReviewer) {
       await withRetry("github.issues.createComment.awaitLenientApproval", async () => {
         return octokit.rest.issues.createComment({
           owner,
           repo,
           issue_number: pullNumber,
-          body: `Lenient check passed, but this PR will not be merged until @${config.lenientApprovalUser} approves the current head commit.`
+          body: `Lenient check passed, but this PR will not be merged until ${approvalRequirement} approves the current head commit.`
         });
       });
-      logger.info({ owner, repo, pullNumber, reviewer: config.lenientApprovalUser }, "Waiting for lenient approval before merging.");
+      logger.info({ owner, repo, pullNumber, adminRecentlyResponded }, "Waiting for eligible lenient approval before merging.");
       return;
     }
   }
@@ -300,7 +341,7 @@ async function hasCurrentHeadApprovalFrom(
     repo: string;
     pullNumber: number;
     headSha: string;
-    reviewerLogin: string;
+    requireAdmin: boolean;
   }
 ): Promise<boolean> {
   const reviews = await octokit.paginate(octokit.rest.pulls.listReviews, {
@@ -310,13 +351,44 @@ async function hasCurrentHeadApprovalFrom(
     per_page: 100
   });
 
-  return reviews.some((review) => {
-    return (
-      review.user?.login === params.reviewerLogin &&
-      review.state === "APPROVED" &&
-      review.commit_id === params.headSha
-    );
-  });
+  const approvedLogins = reviews
+    .filter((review) => review.state === "APPROVED" && review.commit_id === params.headSha)
+    .map((review) => review.user?.login)
+    .filter((login): login is string => Boolean(login));
+
+  for (const login of approvedLogins) {
+    try {
+      const { data: permission } = await octokit.rest.repos.getCollaboratorPermissionLevel({
+        owner: params.owner,
+        repo: params.repo,
+        username: login
+      });
+
+      if (params.requireAdmin) {
+        if (permission.permission === "admin") {
+          return true;
+        }
+        continue;
+      }
+
+      if (new Set(["admin", "maintain", "write"]).has(permission.permission)) {
+        return true;
+      }
+    } catch (error) {
+      logger.warn(
+        {
+          error,
+          owner: params.owner,
+          repo: params.repo,
+          pullNumber: params.pullNumber,
+          login
+        },
+        "Failed to resolve collaborator permission while checking lenient approval eligibility."
+      );
+    }
+  }
+
+  return false;
 }
 
 async function listPullRequestFiles(

@@ -14,7 +14,10 @@ GitHub Actions bot that reviews pull requests by calling Codex CLI, leaves inlin
 - Supports a lenient pass when a repository administrator comments `/lenient-check`.
 - If no repository administrator has commented or reviewed within the last 24 hours, the lenient trigger automatically broadens to users with `write`, `maintain`, or `admin` permission.
 - In lenient mode, only blocks dangerous changes, runtime-impacting issues, errors, crashes, broken builds, data-loss risks, and security risks.
-- A PR that passes lenient mode is not auto-merged until `@lezi-fun` approves the current head commit.
+- A PR that passes lenient mode is not auto-merged until an eligible reviewer approves the current head commit.
+- Eligible reviewers for lenient merge approval are:
+  - repository administrators when an administrator has commented or reviewed on the PR within the last 24 hours
+  - otherwise any repository user with `write`, `maintain`, or `admin` permission
 - If the reviewer detects clearly malicious code, the bot comments with the reason and closes the pull request.
 - Posts inline comments only on valid added diff lines.
 - Approves clean pull requests.
@@ -93,7 +96,6 @@ jobs:
       review_state: ${{ github.event.review.state || '' }}
       review_commit_id: ${{ github.event.review.commit_id || '' }}
       bot_name: github-actions[bot]
-      lenient_approval_user: lezi-fun
       codex_base_url: ${{ vars.CODEX_BASE_URL || 'https://api.openai.com/v1' }}
       codex_model: ${{ vars.CODEX_MODEL || 'gpt-5.4' }}
       codex_reasoning_effort: ${{ vars.CODEX_REASONING_EFFORT || 'high' }}
@@ -133,7 +135,12 @@ That reruns the AI in lenient mode.
 
 If no administrator has commented or reviewed within the last 24 hours on that PR, the command is also accepted from users with `write` or `maintain` permission.
 
-If lenient mode passes, the bot still requires `@lezi-fun` to approve the current head commit before merge.
+If lenient mode passes, the bot still requires an eligible reviewer to approve the current head commit before merge.
+
+Approval eligibility follows the same rule as lenient triggering:
+
+- if a repository administrator has commented or reviewed on that PR within the last 24 hours, only an administrator approval can unlock merge
+- otherwise any user with `write`, `maintain`, or `admin` permission can unlock merge
 
 ## Local development
 
@@ -167,7 +174,6 @@ Important variables:
 - `CODEX_MODEL`: defaults to `gpt-5.4`
 - `CODEX_REASONING_EFFORT`: optional, one of `minimal`, `low`, `medium`, `high`, `xhigh`
 - `BOT_NAME`: defaults to `ghbot`, but the workflow sets it to `github-actions[bot]`
-- `LENIENT_APPROVAL_USER`: defaults to `lezi-fun`
 - `AUTO_MERGE`: defaults to `false`
 - `MERGE_METHOD`: defaults to `squash`
 - `REQUIRE_CHECKS`: defaults to `true`

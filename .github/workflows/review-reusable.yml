@@ -42,10 +42,6 @@ on:
         required: false
         type: string
         default: github-actions[bot]
-      lenient_approval_user:
-        required: false
-        type: string
-        default: lezi-fun
       codex_base_url:
         required: false
         type: string
@@ -113,7 +109,6 @@ jobs:
           CODEX_MODEL: ${{ inputs.codex_model }}
           CODEX_REASONING_EFFORT: ${{ inputs.codex_reasoning_effort }}
           BOT_NAME: ${{ inputs.bot_name }}
-          LENIENT_APPROVAL_USER: ${{ inputs.lenient_approval_user }}
           AUTO_MERGE: ${{ inputs.auto_merge }}
           MERGE_METHOD: ${{ inputs.merge_method }}
           REQUIRE_CHECKS: ${{ inputs.require_checks }}

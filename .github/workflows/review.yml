@@ -42,7 +42,6 @@ jobs:
       review_state: ${{ github.event.review.state || '' }}
       review_commit_id: ${{ github.event.review.commit_id || '' }}
       bot_name: github-actions[bot]
-      lenient_approval_user: lezi-fun
       codex_base_url: ${{ vars.CODEX_BASE_URL || 'https://api.openai.com/v1' }}
       codex_model: ${{ vars.CODEX_MODEL || 'gpt-5.4' }}
       codex_reasoning_effort: ${{ vars.CODEX_REASONING_EFFORT || 'high' }}
