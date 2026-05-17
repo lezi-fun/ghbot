@@ -207,6 +207,10 @@ function buildCodexChildEnv(extraEnv: Record<string, string>): NodeJS.ProcessEnv
   }
 
   for (const [key, value] of Object.entries(extraEnv)) {
+    if (SENSITIVE_ENV_KEYS.includes(key as (typeof SENSITIVE_ENV_KEYS)[number])) {
+      continue;
+    }
+
     env[key] = value;
   }
 
