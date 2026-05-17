@@ -122,6 +122,27 @@ export async function processPullRequestReviewApproval(
     return;
   }
 
+  const hasSuccessfulLenientReview = await hasSuccessfulLenientReviewForHead(octokit, {
+    owner: params.owner,
+    repo: params.repo,
+    pullNumber: params.pullNumber,
+    headSha: params.commitId
+  });
+
+  if (!hasSuccessfulLenientReview) {
+    logger.info(
+      {
+        owner: params.owner,
+        repo: params.repo,
+        pullNumber: params.pullNumber,
+        reviewerLogin: params.reviewerLogin,
+        commitId: params.commitId
+      },
+      "Ignoring lenient approval because there is no successful lenient review for the current head."
+    );
+    return;
+  }
+
   const adminRecentlyResponded = await hasRecentAdminResponse(octokit, {
     owner: params.owner,
     repo: params.repo,
@@ -386,6 +407,47 @@ async function hasCurrentHeadApprovalFrom(
         "Failed to resolve collaborator permission while checking lenient approval eligibility."
       );
     }
+  }
+
+  return false;
+}
+
+async function hasSuccessfulLenientReviewForHead(
+  octokit: Octokit,
+  params: {
+    owner: string;
+    repo: string;
+    pullNumber: number;
+    headSha: string;
+  }
+): Promise<boolean> {
+  const reviews = await octokit.paginate(octokit.rest.pulls.listReviews, {
+    owner: params.owner,
+    repo: params.repo,
+    pull_number: params.pullNumber,
+    per_page: 100
+  });
+
+  const botReviews = reviews
+    .filter((review) => {
+      return (
+        review.user?.login === config.botName &&
+        review.commit_id === params.headSha &&
+        review.state !== "DISMISSED"
+      );
+    })
+    .sort((left, right) => {
+      const leftTime = left.submitted_at ? Date.parse(left.submitted_at) : 0;
+      const rightTime = right.submitted_at ? Date.parse(right.submitted_at) : 0;
+      return rightTime - leftTime;
+    });
+
+  for (const review of botReviews) {
+    if (!review.body?.includes("Mode: lenient")) {
+      continue;
+    }
+
+    return review.state === "APPROVED";
   }
 
   return false;
