@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import process from "node:process";
 import { z } from "zod";
 import { config } from "../config.js";
 import { logger } from "../logger.js";
@@ -104,6 +105,15 @@ export class CodexCliReviewer {
 
 async function runCodexExec(args: string[], extraEnv: Record<string, string>): Promise<void> {
   await new Promise<void>((resolve, reject) => {
+    logger.info(
+      {
+        cmd: "codex",
+        args,
+        timeoutMs: CODEX_EXEC_TIMEOUT_MS
+      },
+      "Spawning Codex CLI process."
+    );
+
     const child = spawn("codex", args, {
       cwd: process.cwd(),
       env: {
@@ -122,6 +132,7 @@ async function runCodexExec(args: string[], extraEnv: Record<string, string>): P
         return;
       }
 
+      logger.error({ timeoutMs: CODEX_EXEC_TIMEOUT_MS }, "Codex CLI review timed out; terminating process.");
       child.kill("SIGTERM");
       reject(new Error(`Codex CLI review timed out after ${CODEX_EXEC_TIMEOUT_MS}ms.`));
     }, CODEX_EXEC_TIMEOUT_MS);
@@ -129,19 +140,13 @@ async function runCodexExec(args: string[], extraEnv: Record<string, string>): P
     child.stdout.on("data", (chunk: Buffer | string) => {
       const text = chunk.toString();
       stdout += text;
-      const trimmed = text.trim();
-      if (trimmed) {
-        logger.info({ chunk: trimmed }, "Codex CLI stdout.");
-      }
+      streamProcessOutput("stdout", text);
     });
 
     child.stderr.on("data", (chunk: Buffer | string) => {
       const text = chunk.toString();
       stderr += text;
-      const trimmed = text.trim();
-      if (trimmed) {
-        logger.warn({ chunk: trimmed }, "Codex CLI stderr.");
-      }
+      streamProcessOutput("stderr", text);
     });
 
     child.on("error", (error) => {
@@ -151,6 +156,7 @@ async function runCodexExec(args: string[], extraEnv: Record<string, string>): P
 
       finished = true;
       clearTimeout(timeout);
+      logger.error({ error }, "Codex CLI process emitted an error event.");
       reject(error);
     });
 
@@ -161,6 +167,8 @@ async function runCodexExec(args: string[], extraEnv: Record<string, string>): P
 
       finished = true;
       clearTimeout(timeout);
+
+      logger.info({ code, signal }, "Codex CLI process exited.");
 
       if (code === 0) {
         resolve();
@@ -178,6 +186,27 @@ async function runCodexExec(args: string[], extraEnv: Record<string, string>): P
       );
     });
   });
+}
+
+function streamProcessOutput(stream: "stdout" | "stderr", text: string): void {
+  const normalized = text.replace(/\r\n/g, "\n");
+  const lines = normalized.split("\n");
+
+  for (const line of lines) {
+    if (!line.trim()) {
+      continue;
+    }
+
+    const prefixed = `[codex-cli ${stream}] ${line}`;
+    if (stream === "stdout") {
+      process.stdout.write(`${prefixed}\n`);
+      logger.info({ stream, line }, "Codex CLI output.");
+      continue;
+    }
+
+    process.stderr.write(`${prefixed}\n`);
+    logger.warn({ stream, line }, "Codex CLI output.");
+  }
 }
 
 function buildCodexConfig(): string {
