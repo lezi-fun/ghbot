@@ -23,35 +23,31 @@ permissions:
 
 jobs:
   review:
-    name: bot-review
     if: |
       github.event_name == 'pull_request_target' ||
       (github.event_name == 'issue_comment' && github.event.issue.pull_request != null) ||
       github.event_name == 'pull_request_review'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
-      - name: Install Codex CLI
-        run: npm install -g @openai/codex
-      - run: npm ci
-      - run: npm run build
-      - name: Remove stale review result
-        run: rm -f .review-result.json
-      - run: node dist/src/actions/runReview.js
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
-          CODEX_BASE_URL: ${{ vars.CODEX_BASE_URL || 'https://api.openai.com/v1' }}
-          CODEX_MODEL: ${{ vars.CODEX_MODEL || 'gpt-5.4' }}
-          CODEX_REASONING_EFFORT: ${{ vars.CODEX_REASONING_EFFORT || 'high' }}
-          BOT_NAME: github-actions[bot]
-          LENIENT_APPROVAL_USER: lezi-fun
-          AUTO_MERGE: ${{ vars.AUTO_MERGE || 'false' }}
-          MERGE_METHOD: ${{ vars.MERGE_METHOD || 'squash' }}
-          REQUIRE_CHECKS: ${{ vars.REQUIRE_CHECKS || 'true' }}
-          MAX_PATCH_CHARS: ${{ vars.MAX_PATCH_CHARS || '120000' }}
-          LOG_LEVEL: info
+    uses: ./.github/workflows/review-reusable.yml
+    secrets:
+      CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+    with:
+      event_name: ${{ github.event_name }}
+      event_action: ${{ github.event.action }}
+      repository_owner: ${{ github.repository_owner }}
+      repository_name: ${{ github.event.repository.name }}
+      pull_number: ${{ github.event.pull_request.number || github.event.issue.number }}
+      commenter_login: ${{ github.event.comment.user.login || '' }}
+      comment_body: ${{ github.event.comment.body || '' }}
+      reviewer_login: ${{ github.event.review.user.login || '' }}
+      review_state: ${{ github.event.review.state || '' }}
+      review_commit_id: ${{ github.event.review.commit_id || '' }}
+      bot_name: github-actions[bot]
+      lenient_approval_user: lezi-fun
+      codex_base_url: ${{ vars.CODEX_BASE_URL || 'https://api.openai.com/v1' }}
+      codex_model: ${{ vars.CODEX_MODEL || 'gpt-5.4' }}
+      codex_reasoning_effort: ${{ vars.CODEX_REASONING_EFFORT || 'high' }}
+      auto_merge: ${{ vars.AUTO_MERGE || 'false' }}
+      merge_method: ${{ vars.MERGE_METHOD || 'squash' }}
+      require_checks: ${{ vars.REQUIRE_CHECKS || 'true' }}
+      max_patch_chars: ${{ vars.MAX_PATCH_CHARS || '120000' }}
+      log_level: info

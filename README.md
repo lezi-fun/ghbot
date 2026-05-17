@@ -44,6 +44,71 @@ Optional repository variables:
 The workflow uses the repository `GITHUB_TOKEN`, so you do not need a GitHub App, webhook endpoint, Vercel deployment, or a self-hosted listener.
 It installs Codex CLI inside the GitHub Actions runner and uses that CLI for the review itself. The workflow writes an isolated Codex `config.toml` at runtime with the configured model, provider base URL, and reasoning setting, then asks Codex CLI to persist its final review result into `.review-result.json`.
 
+## Reuse from another repository
+
+This repository now exposes a reusable workflow at:
+
+```text
+lezi-fun/ghbot/.github/workflows/review-reusable.yml@main
+```
+
+In another repository, create a thin wrapper workflow such as:
+
+```yaml
+name: PR Review Bot
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+  issue_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: write
+  statuses: read
+  issues: write
+
+jobs:
+  review:
+    if: |
+      github.event_name == 'pull_request_target' ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request != null) ||
+      github.event_name == 'pull_request_review'
+    uses: lezi-fun/ghbot/.github/workflows/review-reusable.yml@main
+    secrets:
+      CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+    with:
+      event_name: ${{ github.event_name }}
+      event_action: ${{ github.event.action }}
+      repository_owner: ${{ github.repository_owner }}
+      repository_name: ${{ github.event.repository.name }}
+      pull_number: ${{ github.event.pull_request.number || github.event.issue.number }}
+      commenter_login: ${{ github.event.comment.user.login || '' }}
+      comment_body: ${{ github.event.comment.body || '' }}
+      reviewer_login: ${{ github.event.review.user.login || '' }}
+      review_state: ${{ github.event.review.state || '' }}
+      review_commit_id: ${{ github.event.review.commit_id || '' }}
+      bot_name: github-actions[bot]
+      lenient_approval_user: lezi-fun
+      codex_base_url: ${{ vars.CODEX_BASE_URL || 'https://api.openai.com/v1' }}
+      codex_model: ${{ vars.CODEX_MODEL || 'gpt-5.4' }}
+      codex_reasoning_effort: ${{ vars.CODEX_REASONING_EFFORT || 'high' }}
+      auto_merge: ${{ vars.AUTO_MERGE || 'false' }}
+      merge_method: ${{ vars.MERGE_METHOD || 'squash' }}
+      require_checks: ${{ vars.REQUIRE_CHECKS || 'true' }}
+      max_patch_chars: ${{ vars.MAX_PATCH_CHARS || '120000' }}
+      log_level: info
+```
+
+The caller repository still needs to configure:
+
+- `CODEX_API_KEY` as a secret
+- `CODEX_BASE_URL`, `CODEX_MODEL`, `CODEX_REASONING_EFFORT`, `AUTO_MERGE`, `MERGE_METHOD`, `REQUIRE_CHECKS`, and `MAX_PATCH_CHARS` as repository variables as needed
+
 ## Required workflow permissions
 
 Repository Actions permissions must allow the workflow token to:

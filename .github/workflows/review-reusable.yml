@@ -1,0 +1,131 @@
+name: Reusable PR Review Bot
+
+on:
+  workflow_call:
+    inputs:
+      event_name:
+        required: true
+        type: string
+      event_action:
+        required: true
+        type: string
+      repository_owner:
+        required: true
+        type: string
+      repository_name:
+        required: true
+        type: string
+      pull_number:
+        required: true
+        type: string
+      commenter_login:
+        required: false
+        type: string
+        default: ""
+      comment_body:
+        required: false
+        type: string
+        default: ""
+      reviewer_login:
+        required: false
+        type: string
+        default: ""
+      review_state:
+        required: false
+        type: string
+        default: ""
+      review_commit_id:
+        required: false
+        type: string
+        default: ""
+      bot_name:
+        required: false
+        type: string
+        default: github-actions[bot]
+      lenient_approval_user:
+        required: false
+        type: string
+        default: lezi-fun
+      codex_base_url:
+        required: false
+        type: string
+        default: https://api.openai.com/v1
+      codex_model:
+        required: false
+        type: string
+        default: gpt-5.4
+      codex_reasoning_effort:
+        required: false
+        type: string
+        default: high
+      auto_merge:
+        required: false
+        type: string
+        default: "false"
+      merge_method:
+        required: false
+        type: string
+        default: squash
+      require_checks:
+        required: false
+        type: string
+        default: "true"
+      max_patch_chars:
+        required: false
+        type: string
+        default: "120000"
+      log_level:
+        required: false
+        type: string
+        default: info
+    secrets:
+      CODEX_API_KEY:
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: write
+  statuses: read
+  issues: write
+
+jobs:
+  review:
+    name: bot-review
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install Codex CLI
+        run: npm install -g @openai/codex
+      - run: npm ci
+      - run: npm run build
+      - name: Remove stale review result
+        run: rm -f .review-result.json
+      - run: node dist/src/actions/runReview.js
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+          CODEX_BASE_URL: ${{ inputs.codex_base_url }}
+          CODEX_MODEL: ${{ inputs.codex_model }}
+          CODEX_REASONING_EFFORT: ${{ inputs.codex_reasoning_effort }}
+          BOT_NAME: ${{ inputs.bot_name }}
+          LENIENT_APPROVAL_USER: ${{ inputs.lenient_approval_user }}
+          AUTO_MERGE: ${{ inputs.auto_merge }}
+          MERGE_METHOD: ${{ inputs.merge_method }}
+          REQUIRE_CHECKS: ${{ inputs.require_checks }}
+          MAX_PATCH_CHARS: ${{ inputs.max_patch_chars }}
+          LOG_LEVEL: ${{ inputs.log_level }}
+          GHBOT_EVENT_NAME: ${{ inputs.event_name }}
+          GHBOT_EVENT_ACTION: ${{ inputs.event_action }}
+          GHBOT_REPOSITORY_OWNER: ${{ inputs.repository_owner }}
+          GHBOT_REPOSITORY_NAME: ${{ inputs.repository_name }}
+          GHBOT_PULL_NUMBER: ${{ inputs.pull_number }}
+          GHBOT_COMMENTER_LOGIN: ${{ inputs.commenter_login }}
+          GHBOT_COMMENT_BODY: ${{ inputs.comment_body }}
+          GHBOT_REVIEWER_LOGIN: ${{ inputs.reviewer_login }}
+          GHBOT_REVIEW_STATE: ${{ inputs.review_state }}
+          GHBOT_REVIEW_COMMIT_ID: ${{ inputs.review_commit_id }}

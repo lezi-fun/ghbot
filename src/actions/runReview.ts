@@ -59,15 +59,16 @@ type PullRequestReviewPayload = {
 };
 
 async function main(): Promise<void> {
-  const eventName = process.env.GITHUB_EVENT_NAME;
-  const eventPath = process.env.GITHUB_EVENT_PATH;
-
-  if (!eventName || !eventPath) {
-    throw new Error("GITHUB_EVENT_NAME and GITHUB_EVENT_PATH are required.");
-  }
-
-  const payload = JSON.parse(fs.readFileSync(eventPath, "utf8")) as PullRequestPayload | IssueCommentPayload | PullRequestReviewPayload;
+  const workflowCallEventName = process.env.GHBOT_EVENT_NAME;
+  const payload = workflowCallEventName
+    ? buildPayloadFromWorkflowCallEnv(workflowCallEventName)
+    : readPayloadFromGitHubEventPath();
   const octokit = createGitHubClient();
+  const eventName = workflowCallEventName ?? process.env.GITHUB_EVENT_NAME;
+
+  if (!eventName) {
+    throw new Error("GITHUB_EVENT_NAME is required.");
+  }
 
   logger.info({ eventName }, "Handling GitHub Actions review event.");
 
@@ -133,6 +134,83 @@ async function main(): Promise<void> {
   }
 
   logger.warn({ eventName }, "Unhandled GitHub Actions event.");
+}
+
+function readPayloadFromGitHubEventPath(): PullRequestPayload | IssueCommentPayload | PullRequestReviewPayload {
+  const eventPath = process.env.GITHUB_EVENT_PATH;
+  if (!eventPath) {
+    throw new Error("GITHUB_EVENT_PATH is required when workflow_call inputs are not provided.");
+  }
+
+  return JSON.parse(fs.readFileSync(eventPath, "utf8")) as PullRequestPayload | IssueCommentPayload | PullRequestReviewPayload;
+}
+
+function buildPayloadFromWorkflowCallEnv(eventName: string): PullRequestPayload | IssueCommentPayload | PullRequestReviewPayload {
+  const action = process.env.GHBOT_EVENT_ACTION;
+  const owner = process.env.GHBOT_REPOSITORY_OWNER;
+  const repo = process.env.GHBOT_REPOSITORY_NAME;
+  const pullNumber = Number(process.env.GHBOT_PULL_NUMBER);
+
+  if (!action || !owner || !repo || !Number.isInteger(pullNumber) || pullNumber <= 0) {
+    throw new Error("Missing required GHBOT_* workflow_call inputs.");
+  }
+
+  const repository = {
+    name: repo,
+    owner: {
+      login: owner
+    },
+    full_name: `${owner}/${repo}`
+  };
+
+  if (eventName === "pull_request_target") {
+    return {
+      action,
+      pull_request: {
+        number: pullNumber,
+        draft: false
+      },
+      repository
+    };
+  }
+
+  if (eventName === "issue_comment") {
+    return {
+      action,
+      issue: {
+        number: pullNumber,
+        pull_request: {
+          url: `https://api.github.com/repos/${owner}/${repo}/pulls/${pullNumber}`
+        }
+      },
+      comment: {
+        body: process.env.GHBOT_COMMENT_BODY ?? "",
+        user: {
+          login: process.env.GHBOT_COMMENTER_LOGIN ?? ""
+        }
+      },
+      repository
+    };
+  }
+
+  if (eventName === "pull_request_review") {
+    return {
+      action,
+      review: {
+        state: process.env.GHBOT_REVIEW_STATE ?? "",
+        commit_id: process.env.GHBOT_REVIEW_COMMIT_ID ?? "",
+        user: {
+          login: process.env.GHBOT_REVIEWER_LOGIN ?? ""
+        }
+      },
+      pull_request: {
+        number: pullNumber
+      },
+      repository
+    };
+  }
+
+  throw new Error(`Unsupported GHBOT_EVENT_NAME: ${eventName}`);
 }
 
 main().catch((error) => {
