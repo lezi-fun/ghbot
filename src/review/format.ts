@@ -18,6 +18,13 @@ export function formatReviewBody(decision: ReviewDecision, unpostedFindings: Rev
     lines.push("", "Need a narrower pass? Comment `/lenient-check` on this PR.");
   }
 
+  if (decision.fixTips.length > 0) {
+    lines.push("", "While making changes, also double-check:");
+    for (const tip of decision.fixTips) {
+      lines.push(`- ${tip}`);
+    }
+  }
+
   if (unpostedFindings.length > 0) {
     lines.push("", "Findings that could not be attached inline:");
     for (const finding of unpostedFindings) {

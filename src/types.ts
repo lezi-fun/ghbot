@@ -25,6 +25,7 @@ export type ReviewDecision = {
   shouldClosePullRequest: boolean;
   closeReason: string;
   summary: string;
+  fixTips: string[];
   findings: ReviewFinding[];
 };
 

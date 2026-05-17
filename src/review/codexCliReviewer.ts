@@ -15,6 +15,7 @@ const reviewDecisionSchema = z.object({
   shouldClosePullRequest: z.boolean(),
   closeReason: z.string(),
   summary: z.string(),
+  fixTips: z.array(z.string()),
   findings: z.array(
     z.object({
       path: z.string(),
@@ -200,6 +201,10 @@ function buildCodexChildEnv(extraEnv: Record<string, string>): NodeJS.ProcessEnv
   copyEnv(env, "TMPDIR");
   copyEnv(env, "TMP");
   copyEnv(env, "TEMP");
+  copyEnv(env, "PATHEXT");
+  copyEnv(env, "ComSpec");
+  copyEnv(env, "SystemRoot");
+  copyEnv(env, "WINDIR");
   copyEnv(env, "LANG");
   copyEnv(env, "LC_ALL");
   copyEnv(env, "TERM");
@@ -298,7 +303,8 @@ function buildPrompt(input: {
     `Write your final JSON review result to ${resultPath}.`,
     "Do not wrap the JSON in markdown.",
     "Do not print the final JSON to stdout.",
-    "The JSON must have exactly these top-level keys: safeToMerge, shouldClosePullRequest, closeReason, summary, findings.",
+    "The JSON must have exactly these top-level keys: safeToMerge, shouldClosePullRequest, closeReason, summary, fixTips, findings.",
+    "fixTips must be an array of short strings describing related areas the author should double-check while fixing the findings to avoid rework. Use an empty array when there are no useful tips.",
     "Each item in findings must have exactly these keys: path, line, severity, title, body.",
     'Valid severity values are only "blocking" or "suggestion".',
     `After writing ${resultPath}, you may print short progress logs, but the file contents must be valid JSON.`,
@@ -329,10 +335,13 @@ function buildSystemPrompt(mode: ReviewMode): string {
     "You are a senior software engineer reviewing a GitHub pull request.",
     "Produce a final result object that exactly matches the requested JSON structure.",
     "Only set safeToMerge=true when there are no blocking findings.",
+    "Find as many real issues as you can in this single pass. Do not stop after the first blocking issue if there are additional actionable findings in the diff.",
+    "When you identify a bug, also think through adjacent code paths and related regressions so the review catches the full cluster of issues instead of forcing a follow-up round.",
     "Set shouldClosePullRequest=true only for clearly malicious code: backdoors, credential theft, token exfiltration, destructive commands, malware, hidden persistence, privilege escalation, supply-chain compromise, or intentionally abusive behavior.",
     "Do not set shouldClosePullRequest=true for ordinary bugs, crashes, failing tests, incomplete code, suspicious-but-unproven code, or low-quality changes.",
     "When shouldClosePullRequest=true, explain the evidence in closeReason. Otherwise closeReason must be an empty string.",
     "For each finding, choose a line number that exists on an added line in the supplied patch whenever possible.",
+    "Use fixTips for high-value reminders about nearby code paths, platform compatibility, configuration, tests, or follow-up checks the author should review while making changes.",
     "Do not invent files, line numbers, test results, or runtime behavior."
   ];
 
