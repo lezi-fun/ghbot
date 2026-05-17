@@ -1,6 +1,13 @@
 import type { Octokit } from "@octokit/rest";
 
-const IGNORED_CHECK_RUN_NAMES = new Set(["ghbot review", "bot-review"]);
+const IGNORED_CHECK_RUN_NAMES = new Set([
+  "ghbot review",
+  "bot-review",
+  "bot-schedule-recheck",
+  "review-schedule-recheck"
+]);
+
+const IGNORED_CHECK_RUN_SUFFIXES = ["/ bot-review", "/ bot-schedule-recheck"];
 
 export async function requiredChecksAreGreen(
   octokit: Octokit,
@@ -24,7 +31,7 @@ export async function requiredChecksAreGreen(
   ]);
 
   const failedCheck = checks.data.check_runs.find((check) => {
-    if (IGNORED_CHECK_RUN_NAMES.has(check.name)) {
+    if (shouldIgnoreCheckRun(check.name)) {
       return false;
     }
 
@@ -49,4 +56,11 @@ export async function requiredChecksAreGreen(
   }
 
   return { ok: true };
+}
+
+function shouldIgnoreCheckRun(name: string): boolean {
+  return (
+    IGNORED_CHECK_RUN_NAMES.has(name) ||
+    IGNORED_CHECK_RUN_SUFFIXES.some((suffix) => name.endsWith(suffix))
+  );
 }
