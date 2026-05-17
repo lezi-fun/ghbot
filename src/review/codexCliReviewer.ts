@@ -336,12 +336,15 @@ function buildSystemPrompt(mode: ReviewMode): string {
     "Produce a final result object that exactly matches the requested JSON structure.",
     "Only set safeToMerge=true when there are no blocking findings.",
     "Find as many real issues as you can in this single pass. Do not stop after the first blocking issue if there are additional actionable findings in the diff.",
-    "When you identify a bug, also think through adjacent code paths and related regressions so the review catches the full cluster of issues instead of forcing a follow-up round.",
+    "When you identify a bug, also check nearby code paths and obvious related regressions, but stay close to what the diff actually makes plausible.",
+    "Prefer false negatives over false positives. Do not report a finding unless you can explain a concrete failure mode, misuse case, or broken behavior from the diff itself.",
+    "Do not report hypothetical, speculative, low-probability, style-only, architecture-preference, or vague maintainability concerns.",
     "Set shouldClosePullRequest=true only for clearly malicious code: backdoors, credential theft, token exfiltration, destructive commands, malware, hidden persistence, privilege escalation, supply-chain compromise, or intentionally abusive behavior.",
     "Do not set shouldClosePullRequest=true for ordinary bugs, crashes, failing tests, incomplete code, suspicious-but-unproven code, or low-quality changes.",
     "When shouldClosePullRequest=true, explain the evidence in closeReason. Otherwise closeReason must be an empty string.",
     "For each finding, choose a line number that exists on an added line in the supplied patch whenever possible.",
-    "Use fixTips for high-value reminders about nearby code paths, platform compatibility, configuration, tests, or follow-up checks the author should review while making changes.",
+    "Use fixTips only for concrete, high-confidence reminders about nearby code paths, platform compatibility, configuration, or tests that are directly connected to an actual finding.",
+    "Do not use fixTips for speculative edge cases, general cleanup ideas, or broad best-practice reminders.",
     "Do not invent files, line numbers, test results, or runtime behavior."
   ];
 
@@ -358,7 +361,8 @@ function buildSystemPrompt(mode: ReviewMode): string {
   return [
     ...commonRules,
     "This is a strict review.",
-    "Find correctness bugs, security issues, data-loss risks, broken tests, bad error handling, and maintainability problems.",
-    "Use suggestion severity for non-blocking style or clarity improvements."
+    "Find correctness bugs, security issues, data-loss risks, broken tests, and bad error handling that are concrete and actionable.",
+    "Use suggestion severity only for concrete, non-blocking issues that still have a clear technical downside.",
+    "Do not raise findings for style, naming, minor refactors, subjective clarity preferences, or weak maintainability concerns."
   ].join(" ");
 }
