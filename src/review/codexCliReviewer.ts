@@ -50,8 +50,7 @@ export class CodexCliReviewer {
         const args = [
           "exec",
           "--skip-git-repo-check",
-          "--sandbox",
-          "workspace-write",
+          "--dangerously-bypass-approvals-and-sandbox",
           "--output-schema",
           schemaPath,
           "--output-last-message",
@@ -212,21 +211,19 @@ function streamProcessOutput(stream: "stdout" | "stderr", text: string): void {
 function buildCodexConfig(): string {
   const lines = [
     `model = ${toTomlString(config.codexModel)}`,
-    'model_provider = "ghbot"',
-    'approval_policy = "never"',
-    'sandbox_mode = "workspace-write"'
+    'model_provider = "bot"',
+    'approvals_reviewer = "user"'
   ];
 
   if (config.codexReasoningEffort) {
     lines.push(`model_reasoning_effort = ${toTomlString(config.codexReasoningEffort)}`);
   }
 
-  lines.push("", "[model_providers.ghbot]");
-  lines.push('name = "ghbot"');
+  lines.push("", "[model_providers.bot]");
+  lines.push('name = "bot"');
   lines.push(`base_url = ${toTomlString(normalizeBaseUrl(config.codexBaseUrl))}`);
   lines.push('env_key = "CODEX_API_KEY"');
   lines.push('wire_api = "responses"');
-  lines.push("requires_openai_auth = false");
 
   return `${lines.join("\n")}\n`;
 }
