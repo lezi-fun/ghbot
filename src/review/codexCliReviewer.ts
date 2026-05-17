@@ -8,7 +8,7 @@ import { logger } from "../logger.js";
 import { withRetry } from "../retry.js";
 import type { PullRequestFile, ReviewDecision, ReviewMode } from "../types.js";
 
-const CODEX_EXEC_TIMEOUT_MS = 3 * 60 * 1000;
+const CODEX_EXEC_TIMEOUT_MS = 10 * 60 * 1000;
 
 const reviewDecisionSchema = z.object({
   safeToMerge: z.boolean(),
