@@ -39,6 +39,8 @@ jobs:
         run: npm install -g @openai/codex
       - run: npm ci
       - run: npm run build
+      - name: Remove stale review result
+        run: rm -f .review-result.json
       - run: node dist/src/actions/runReview.js
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

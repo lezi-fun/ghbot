@@ -37,24 +37,19 @@ export class CodexCliReviewer {
       const tempRoot = path.join(process.cwd(), ".ghbot-tmp");
       await fs.mkdir(tempRoot, { recursive: true });
       const tempDir = await fs.mkdtemp(path.join(tempRoot, "codex-"));
-      const schemaPath = path.join(tempDir, "review-schema.json");
-      const outputPath = path.join(tempDir, "review-output.json");
       const codexHome = path.join(tempDir, "codex-home");
+      const resultPath = path.join(process.cwd(), ".review-result.json");
 
       try {
+        await fs.rm(resultPath, { force: true });
         await fs.mkdir(codexHome, { recursive: true });
         await fs.writeFile(path.join(codexHome, "config.toml"), buildCodexConfig(), "utf8");
-        await fs.writeFile(schemaPath, JSON.stringify(buildSchema(), null, 2), "utf8");
 
-        const prompt = buildPrompt(input);
+        const prompt = buildPrompt(input, resultPath);
         const args = [
           "exec",
           "--skip-git-repo-check",
           "--dangerously-bypass-approvals-and-sandbox",
-          "--output-schema",
-          schemaPath,
-          "--output-last-message",
-          outputPath,
           "-C",
           process.cwd(),
           "--ephemeral"
@@ -93,9 +88,16 @@ export class CodexCliReviewer {
           throw error;
         }
 
-        const raw = await fs.readFile(outputPath, "utf8");
+        try {
+          await fs.access(resultPath);
+        } catch {
+          throw new Error(`Codex CLI did not create ${resultPath}.`);
+        }
+
+        const raw = await fs.readFile(resultPath, "utf8");
         return reviewDecisionSchema.parse(JSON.parse(raw));
       } finally {
+        await fs.rm(resultPath, { force: true });
         await fs.rm(tempDir, { recursive: true, force: true });
       }
     });
@@ -241,43 +243,22 @@ function toTomlString(value: string): string {
   return JSON.stringify(value);
 }
 
-function buildSchema() {
-  return {
-    type: "object",
-    additionalProperties: false,
-    required: ["safeToMerge", "shouldClosePullRequest", "closeReason", "summary", "findings"],
-    properties: {
-      safeToMerge: { type: "boolean" },
-      shouldClosePullRequest: { type: "boolean" },
-      closeReason: { type: "string" },
-      summary: { type: "string" },
-      findings: {
-        type: "array",
-        items: {
-          type: "object",
-          additionalProperties: false,
-          required: ["path", "line", "severity", "title", "body"],
-          properties: {
-            path: { type: "string" },
-            line: { type: "integer", minimum: 1 },
-            severity: { type: "string", enum: ["blocking", "suggestion"] },
-            title: { type: "string" },
-            body: { type: "string" }
-          }
-        }
-      }
-    }
-  };
-}
-
 function buildPrompt(input: {
   title: string;
   body: string | null;
   files: PullRequestFile[];
   mode: ReviewMode;
-}): string {
+}, resultPath: string): string {
   return [
     buildSystemPrompt(input.mode),
+    "",
+    `Write your final JSON review result to ${resultPath}.`,
+    "Do not wrap the JSON in markdown.",
+    "Do not print the final JSON to stdout.",
+    "The JSON must have exactly these top-level keys: safeToMerge, shouldClosePullRequest, closeReason, summary, findings.",
+    "Each item in findings must have exactly these keys: path, line, severity, title, body.",
+    'Valid severity values are only "blocking" or "suggestion".',
+    `After writing ${resultPath}, you may print short progress logs, but the file contents must be valid JSON.`,
     "",
     "Pull request payload:",
     JSON.stringify(
@@ -303,7 +284,7 @@ function buildPrompt(input: {
 function buildSystemPrompt(mode: ReviewMode): string {
   const commonRules = [
     "You are a senior software engineer reviewing a GitHub pull request.",
-    "Return JSON that exactly matches the provided schema.",
+    "Produce a final result object that exactly matches the requested JSON structure.",
     "Only set safeToMerge=true when there are no blocking findings.",
     "Set shouldClosePullRequest=true only for clearly malicious code: backdoors, credential theft, token exfiltration, destructive commands, malware, hidden persistence, privilege escalation, supply-chain compromise, or intentionally abusive behavior.",
     "Do not set shouldClosePullRequest=true for ordinary bugs, crashes, failing tests, incomplete code, suspicious-but-unproven code, or low-quality changes.",
