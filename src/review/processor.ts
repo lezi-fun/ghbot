@@ -624,18 +624,48 @@ async function submitReview(
   const hasBlockingFinding = params.decision.findings.some((finding) => finding.severity === "blocking");
   const event: "APPROVE" | "REQUEST_CHANGES" =
     params.decision.safeToMerge && !hasBlockingFinding ? "APPROVE" : "REQUEST_CHANGES";
+  const body = formatReviewBody(params.decision, unpostedFindings, params.mode);
 
-  await withRetry("github.pulls.createReview", async () => {
-    return octokit.rest.pulls.createReview({
-      owner: params.owner,
-      repo: params.repo,
-      pull_number: params.pullNumber,
-      commit_id: params.commitId,
-      event,
-      body: formatReviewBody(params.decision, unpostedFindings, params.mode),
-      comments
+  try {
+    await withRetry("github.pulls.createReview", async () => {
+      return octokit.rest.pulls.createReview({
+        owner: params.owner,
+        repo: params.repo,
+        pull_number: params.pullNumber,
+        commit_id: params.commitId,
+        event,
+        body,
+        comments
+      });
     });
-  });
+  } catch (error) {
+    if (!shouldFallbackToCommentReview(error, event)) {
+      throw error;
+    }
+
+    logger.warn(
+      {
+        error,
+        owner: params.owner,
+        repo: params.repo,
+        pullNumber: params.pullNumber,
+        commitId: params.commitId
+      },
+      "Falling back to COMMENT review because the current token is not allowed to approve pull requests."
+    );
+
+    await withRetry("github.pulls.createReview.commentFallback", async () => {
+      return octokit.rest.pulls.createReview({
+        owner: params.owner,
+        repo: params.repo,
+        pull_number: params.pullNumber,
+        commit_id: params.commitId,
+        event: "COMMENT",
+        body,
+        comments
+      });
+    });
+  }
 }
 
 async function upsertReviewCheckRun(
@@ -786,6 +816,22 @@ async function dismissExistingBotReviews(
       );
     }
   }
+}
+
+function shouldFallbackToCommentReview(error: unknown, event: "APPROVE" | "REQUEST_CHANGES"): boolean {
+  if (event !== "APPROVE") {
+    return false;
+  }
+
+  if (typeof error !== "object" || error === null || !("status" in error) || error.status !== 422) {
+    return false;
+  }
+
+  if (!("message" in error) || typeof error.message !== "string") {
+    return false;
+  }
+
+  return error.message.includes("GitHub Actions is not permitted to approve pull requests.");
 }
 
 async function hasRecentAdminResponse(
