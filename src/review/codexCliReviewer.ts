@@ -206,6 +206,17 @@ function buildCodexChildEnv(extraEnv: Record<string, string>): NodeJS.ProcessEnv
   copyEnv(env, "NO_COLOR");
   copyEnv(env, "FORCE_COLOR");
   copyEnv(env, "CI");
+  copyEnv(env, "HTTP_PROXY");
+  copyEnv(env, "HTTPS_PROXY");
+  copyEnv(env, "NO_PROXY");
+  copyEnv(env, "http_proxy");
+  copyEnv(env, "https_proxy");
+  copyEnv(env, "no_proxy");
+  copyEnv(env, "ALL_PROXY");
+  copyEnv(env, "all_proxy");
+  copyEnv(env, "NODE_EXTRA_CA_CERTS");
+  copyEnv(env, "SSL_CERT_FILE");
+  copyEnv(env, "SSL_CERT_DIR");
 
   for (const [key, value] of Object.entries(extraEnv)) {
     env[key] = value;
