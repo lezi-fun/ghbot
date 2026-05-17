@@ -7,7 +7,7 @@ GitHub Actions bot that reviews pull requests by calling Codex CLI, leaves inlin
 - Triggers on `pull_request_target`: `opened`, `synchronize`, `reopened`, `ready_for_review`.
 - When a new PR is opened, posts an immediate comment that review has started.
 - Fetches changed files and patches from the pull request.
-- Asks Codex CLI for a structured decision:
+- Asks Codex CLI to review the PR and write a structured JSON result to `.review-result.json`:
   - `safeToMerge=true` only when there are no blocking findings.
   - `blocking` findings become request-changes reviews.
   - `suggestion` findings are included as non-blocking suggestions.
@@ -19,6 +19,7 @@ GitHub Actions bot that reviews pull requests by calling Codex CLI, leaves inlin
 - Posts inline comments only on valid added diff lines.
 - Approves clean pull requests.
 - Retries transient Codex CLI and GitHub API request failures up to 5 times before giving up.
+- Deletes any stale `.review-result.json` before each run and again after each review attempt.
 - If `AUTO_MERGE=true`, merges only after:
   - the AI reviewer says the PR is safe,
   - GitHub reports the PR as mergeable,
@@ -41,7 +42,7 @@ Optional repository variables:
 - `MAX_PATCH_CHARS`: defaults to `120000`
 
 The workflow uses the repository `GITHUB_TOKEN`, so you do not need a GitHub App, webhook endpoint, Vercel deployment, or a self-hosted listener.
-It installs Codex CLI inside the GitHub Actions runner and uses that CLI for the review itself. The workflow writes an isolated Codex `config.toml` at runtime so each run gets an explicit model, provider base URL, and reasoning setting.
+It installs Codex CLI inside the GitHub Actions runner and uses that CLI for the review itself. The workflow writes an isolated Codex `config.toml` at runtime with the configured model, provider base URL, and reasoning setting, then asks Codex CLI to persist its final review result into `.review-result.json`.
 
 ## Required workflow permissions
 
@@ -106,6 +107,23 @@ Important variables:
 - `MERGE_METHOD`: defaults to `squash`
 - `REQUIRE_CHECKS`: defaults to `true`
 - `MAX_PATCH_CHARS`: defaults to `120000`
+
+The generated Codex CLI config is intentionally close to a working local setup:
+
+```toml
+model = "gpt-5.4"
+model_provider = "bot"
+approvals_reviewer = "user"
+model_reasoning_effort = "high"
+
+[model_providers.bot]
+name = "bot"
+base_url = "https://api.openai.com/v1"
+env_key = "CODEX_API_KEY"
+wire_api = "responses"
+```
+
+The workflow invokes Codex CLI with `--dangerously-bypass-approvals-and-sandbox`, relies on `.review-result.json` for the final machine-readable result, and streams Codex CLI stdout/stderr into the GitHub Actions log for debugging.
 
 ## Safety notes
 
