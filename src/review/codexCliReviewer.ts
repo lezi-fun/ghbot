@@ -106,21 +106,21 @@ export class CodexCliReviewer {
 
 async function runCodexExec(args: string[], extraEnv: Record<string, string>): Promise<void> {
   await new Promise<void>((resolve, reject) => {
+    const childEnv = buildCodexChildEnv(extraEnv);
+
     logger.info(
       {
         cmd: "codex",
         args,
-        timeoutMs: CODEX_EXEC_TIMEOUT_MS
+        timeoutMs: CODEX_EXEC_TIMEOUT_MS,
+        strippedEnvKeys: SENSITIVE_ENV_KEYS.filter((key) => key in process.env)
       },
       "Spawning Codex CLI process."
     );
 
     const child = spawn("codex", args, {
       cwd: process.cwd(),
-      env: {
-        ...process.env,
-        ...extraEnv
-      },
+      env: childEnv,
       stdio: ["ignore", "pipe", "pipe"]
     });
 
@@ -187,6 +187,30 @@ async function runCodexExec(args: string[], extraEnv: Record<string, string>): P
       );
     });
   });
+}
+
+const SENSITIVE_ENV_KEYS = [
+  "GITHUB_TOKEN",
+  "GITHUB_APP_ID",
+  "GITHUB_APP_PRIVATE_KEY",
+  "GITHUB_APP_INSTALLATION_ID"
+] as const;
+
+function buildCodexChildEnv(extraEnv: Record<string, string>): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    ...extraEnv
+  };
+
+  for (const key of SENSITIVE_ENV_KEYS) {
+    delete env[key];
+  }
+
+  for (const [key, value] of Object.entries(extraEnv)) {
+    env[key] = value;
+  }
+
+  return env;
 }
 
 function streamProcessOutput(stream: "stdout" | "stderr", text: string): void {
