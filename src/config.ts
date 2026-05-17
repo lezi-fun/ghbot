@@ -28,7 +28,7 @@ const envBoolean = z.preprocess((value) => {
 
 const configSchema = z.object({
   port: z.coerce.number().int().positive().default(3000),
-  githubToken: z.string().min(1),
+  githubToken: optionalString,
   githubAppId: optionalString,
   githubAppPrivateKey: optionalString,
   githubAppInstallationId: z.preprocess((value) => {
