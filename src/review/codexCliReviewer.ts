@@ -107,13 +107,14 @@ export class CodexCliReviewer {
 async function runCodexExec(args: string[], extraEnv: Record<string, string>): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const childEnv = buildCodexChildEnv(extraEnv);
+    const inheritedEnvKeys = Object.keys(childEnv).filter((key) => !(key in extraEnv));
 
     logger.info(
       {
         cmd: "codex",
         args,
         timeoutMs: CODEX_EXEC_TIMEOUT_MS,
-        strippedEnvKeys: SENSITIVE_ENV_KEYS.filter((key) => key in process.env)
+        inheritedEnvKeys
       },
       "Spawning Codex CLI process."
     );
