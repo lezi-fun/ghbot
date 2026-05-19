@@ -13,6 +13,7 @@ const reviewer = new CodexCliReviewer();
 const CHECK_RUN_NAME = "ghbot review";
 export const LENIENT_COMMENT_COMMAND = "/lenient-check";
 const ADMIN_RESPONSE_WINDOW_MS = 24 * 60 * 60 * 1000;
+const CLOSED_BRANCH_DELETE_AFTER_MS = 3 * 24 * 60 * 60 * 1000;
 
 export async function processPullRequest(octokit: Octokit, ref: PullRequestRef, mode: ReviewMode = "strict"): Promise<void> {
   const { owner, repo, pullNumber } = ref;
@@ -149,6 +150,55 @@ export async function processScheduledLenientMerges(
       headSha: pullRequest.head.sha,
       mode: "lenient",
       emitStatusComments: false
+    });
+  }
+}
+
+export async function processScheduledBranchCleanup(
+  octokit: Octokit,
+  params: {
+    owner: string;
+    repo: string;
+  }
+): Promise<void> {
+  const pullRequests = await octokit.paginate(octokit.rest.pulls.list, {
+    owner: params.owner,
+    repo: params.repo,
+    state: "all",
+    per_page: 100
+  });
+
+  const now = Date.now();
+
+  for (const pullRequest of pullRequests) {
+    if (!pullRequest.head?.ref || pullRequest.head.repo?.full_name !== `${params.owner}/${params.repo}`) {
+      continue;
+    }
+
+    if (pullRequest.merged_at) {
+      await deleteBranchIfPresent(octokit, {
+        owner: params.owner,
+        repo: params.repo,
+        branch: pullRequest.head.ref,
+        reason: `merged PR #${pullRequest.number}`
+      });
+      continue;
+    }
+
+    if (pullRequest.state !== "closed" || !pullRequest.closed_at) {
+      continue;
+    }
+
+    const closedAt = Date.parse(pullRequest.closed_at);
+    if (Number.isNaN(closedAt) || now - closedAt < CLOSED_BRANCH_DELETE_AFTER_MS) {
+      continue;
+    }
+
+    await deleteBranchIfPresent(octokit, {
+      owner: params.owner,
+      repo: params.repo,
+      branch: pullRequest.head.ref,
+      reason: `closed PR #${pullRequest.number} older than 3 days`
     });
   }
 }
@@ -815,6 +865,51 @@ async function dismissExistingBotReviews(
         "Failed to dismiss existing bot review."
       );
     }
+  }
+}
+
+async function deleteBranchIfPresent(
+  octokit: Octokit,
+  params: {
+    owner: string;
+    repo: string;
+    branch: string;
+    reason: string;
+  }
+): Promise<void> {
+  try {
+    await withRetry("github.git.deleteRef", async () => {
+      return octokit.rest.git.deleteRef({
+        owner: params.owner,
+        repo: params.repo,
+        ref: `heads/${params.branch}`
+      });
+    });
+
+    logger.info(
+      {
+        owner: params.owner,
+        repo: params.repo,
+        branch: params.branch,
+        reason: params.reason
+      },
+      "Deleted branch after PR cleanup."
+    );
+  } catch (error) {
+    if (isNotFoundError(error)) {
+      return;
+    }
+
+    logger.warn(
+      {
+        error,
+        owner: params.owner,
+        repo: params.repo,
+        branch: params.branch,
+        reason: params.reason
+      },
+      "Failed to delete branch during PR cleanup."
+    );
   }
 }
 

@@ -14,6 +14,7 @@ GitHub Actions bot that reviews pull requests by calling Codex CLI, leaves inlin
 - Supports a lenient pass when a repository administrator comments `/lenient-check`.
 - If no repository administrator has commented or reviewed within the last 24 hours, the lenient trigger automatically broadens to users with `write`, `maintain`, or `admin` permission.
 - A scheduled recheck runs hourly so the 24-hour fallback can take effect even if no new PR event arrives after the window expires.
+- The hourly scheduled run also deletes merged branches immediately and deletes branches for closed PRs after 3 days.
 - In lenient mode, only blocks dangerous changes, runtime-impacting issues, errors, crashes, broken builds, data-loss risks, and security risks.
 - A PR that passes lenient mode is not auto-merged until an eligible reviewer approves the current head commit.
 - Eligible reviewers for lenient merge approval are:
