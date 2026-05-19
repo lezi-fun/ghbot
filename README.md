@@ -49,6 +49,7 @@ Optional repository variables:
 - `MERGE_METHOD`: `merge`, `squash`, or `rebase`, defaults to `squash`
 - `REQUIRE_CHECKS`: defaults to `true`
 - `MAX_PATCH_CHARS`: defaults to `120000`
+- `BRANCH_CLEANUP_SKIP_BRANCHES`: comma-separated branch patterns to keep, for example `main,develop,release/*`
 
 The workflow automatically receives `github.token` from GitHub Actions, so you do not need to create a repository secret named `GITHUB_TOKEN`.
 If you do nothing else, ghbot uses that workflow token for comments, reviews, checks, and merges.
@@ -85,6 +86,7 @@ Notes:
 - `GH_APP_INSTALLATION_ID` is optional. ghbot can resolve it automatically from the repository if the App is installed there.
 - Keep `CODEX_API_KEY` as a separate secret. The App only replaces GitHub write identity; it does not replace Codex authentication.
 - The repository still gets `github.token` automatically from GitHub Actions, and ghbot uses it as a fallback if App authentication is unavailable or broken.
+- The scheduled branch cleanup skips the repository default branch and any branches matched by `BRANCH_CLEANUP_SKIP_BRANCHES`. It also skips protected branches automatically.
 
 ## Reuse from another repository
 
@@ -145,6 +147,7 @@ jobs:
       merge_method: ${{ vars.MERGE_METHOD || 'squash' }}
       require_checks: ${{ vars.REQUIRE_CHECKS || 'true' }}
       max_patch_chars: ${{ vars.MAX_PATCH_CHARS || '120000' }}
+      branch_cleanup_skip_branches: ${{ vars.BRANCH_CLEANUP_SKIP_BRANCHES || '' }}
       log_level: info
 ```
 
@@ -153,6 +156,7 @@ The caller repository still needs to configure:
 - `CODEX_API_KEY` as a secret
 - optional `GH_APP_ID`, `GH_APP_PRIVATE_KEY`, and `GH_APP_INSTALLATION_ID` secrets if you want GitHub App identity
 - `CODEX_BASE_URL`, `CODEX_MODEL`, `CODEX_REASONING_EFFORT`, `AUTO_MERGE`, `MERGE_METHOD`, `REQUIRE_CHECKS`, and `MAX_PATCH_CHARS` as repository variables as needed
+- `BRANCH_CLEANUP_SKIP_BRANCHES` as a repository variable if you want to keep long-lived or shared branches out of scheduled cleanup
 
 ## Required workflow permissions
 
@@ -225,6 +229,7 @@ Important variables:
 - `MERGE_METHOD`: defaults to `squash`
 - `REQUIRE_CHECKS`: defaults to `true`
 - `MAX_PATCH_CHARS`: defaults to `120000`
+- `BRANCH_CLEANUP_SKIP_BRANCHES`: optional comma-separated list of branch patterns skipped by scheduled cleanup
 
 The generated Codex CLI config is intentionally close to a working local setup:
 

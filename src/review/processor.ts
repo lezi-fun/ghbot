@@ -161,6 +161,11 @@ export async function processScheduledBranchCleanup(
     repo: string;
   }
 ): Promise<void> {
+  const { data: repository } = await octokit.rest.repos.get({
+    owner: params.owner,
+    repo: params.repo
+  });
+
   const pullRequests = await octokit.paginate(octokit.rest.pulls.list, {
     owner: params.owner,
     repo: params.repo,
@@ -172,6 +177,20 @@ export async function processScheduledBranchCleanup(
 
   for (const pullRequest of pullRequests) {
     if (!pullRequest.head?.ref || pullRequest.head.repo?.full_name !== `${params.owner}/${params.repo}`) {
+      continue;
+    }
+
+    if (shouldSkipBranchCleanup(pullRequest.head.ref, repository.default_branch)) {
+      logger.info(
+        {
+          owner: params.owner,
+          repo: params.repo,
+          branch: pullRequest.head.ref,
+          pullNumber: pullRequest.number,
+          defaultBranch: repository.default_branch
+        },
+        "Skipping branch cleanup because the branch is configured or considered a common shared branch."
+      );
       continue;
     }
 
@@ -193,6 +212,25 @@ export async function processScheduledBranchCleanup(
           pullNumber: pullRequest.number
         },
         "Skipping branch cleanup because another open pull request still uses the same head ref."
+      );
+      continue;
+    }
+
+    const branchProtected = await isProtectedBranch(octokit, {
+      owner: params.owner,
+      repo: params.repo,
+      branch: pullRequest.head.ref
+    });
+
+    if (branchProtected) {
+      logger.info(
+        {
+          owner: params.owner,
+          repo: params.repo,
+          branch: pullRequest.head.ref,
+          pullNumber: pullRequest.number
+        },
+        "Skipping branch cleanup because the branch is protected."
       );
       continue;
     }
@@ -932,6 +970,52 @@ async function deleteBranchIfPresent(
       },
       "Failed to delete branch during PR cleanup."
     );
+  }
+}
+
+function shouldSkipBranchCleanup(branch: string, defaultBranch: string): boolean {
+  if (branch === defaultBranch) {
+    return true;
+  }
+
+  return config.branchCleanupSkipBranches.some((pattern) => branchMatchesPattern(branch, pattern));
+}
+
+function branchMatchesPattern(branch: string, pattern: string): boolean {
+  if (!pattern) {
+    return false;
+  }
+
+  const escaped = pattern
+    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*/g, ".*")
+    .replace(/\?/g, ".");
+
+  return new RegExp(`^${escaped}$`).test(branch);
+}
+
+async function isProtectedBranch(
+  octokit: Octokit,
+  params: {
+    owner: string;
+    repo: string;
+    branch: string;
+  }
+): Promise<boolean> {
+  try {
+    const { data } = await octokit.rest.repos.getBranch({
+      owner: params.owner,
+      repo: params.repo,
+      branch: params.branch
+    });
+
+    return Boolean(data.protected);
+  } catch (error) {
+    if (isNotFoundError(error)) {
+      return false;
+    }
+
+    throw error;
   }
 }
 

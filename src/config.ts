@@ -5,6 +5,17 @@ const optionalString = z.preprocess((value) => {
   return value === "" ? undefined : value;
 }, z.string().optional());
 
+const csvList = z.preprocess((value) => {
+  if (typeof value !== "string") {
+    return [];
+  }
+
+  return value
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+}, z.array(z.string()));
+
 const envBoolean = z.preprocess((value) => {
   if (typeof value !== "string") {
     return value;
@@ -49,6 +60,7 @@ const configSchema = z.object({
   mergeMethod: z.enum(["merge", "squash", "rebase"]).default("squash"),
   requireChecks: envBoolean.default(true),
   maxPatchChars: z.coerce.number().int().positive().default(120_000),
+  branchCleanupSkipBranches: csvList,
   logLevel: z.string().min(1).default("info")
 });
 
@@ -67,5 +79,6 @@ export const config = configSchema.parse({
   mergeMethod: process.env.MERGE_METHOD,
   requireChecks: process.env.REQUIRE_CHECKS,
   maxPatchChars: process.env.MAX_PATCH_CHARS,
+  branchCleanupSkipBranches: process.env.BRANCH_CLEANUP_SKIP_BRANCHES,
   logLevel: process.env.LOG_LEVEL
 });

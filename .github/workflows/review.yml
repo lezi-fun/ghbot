@@ -54,6 +54,7 @@ jobs:
       merge_method: ${{ vars.MERGE_METHOD || 'squash' }}
       require_checks: ${{ vars.REQUIRE_CHECKS || 'true' }}
       max_patch_chars: ${{ vars.MAX_PATCH_CHARS || '120000' }}
+      branch_cleanup_skip_branches: ${{ vars.BRANCH_CLEANUP_SKIP_BRANCHES || '' }}
       log_level: info
   review-schedule-recheck:
     if: github.event_name == 'schedule'
@@ -77,5 +78,6 @@ jobs:
       merge_method: ${{ vars.MERGE_METHOD || 'squash' }}
       require_checks: ${{ vars.REQUIRE_CHECKS || 'true' }}
       max_patch_chars: ${{ vars.MAX_PATCH_CHARS || '120000' }}
+      branch_cleanup_skip_branches: ${{ vars.BRANCH_CLEANUP_SKIP_BRANCHES || '' }}
       log_level: info
       run_schedule_recheck: "true"
