@@ -7,6 +7,7 @@ import {
   processLenientCheckComment,
   processPullRequest,
   processScheduledLenientMerges,
+  processScheduledBranchCleanup,
   processPullRequestReviewApproval
 } from "../review/processor.js";
 
@@ -144,6 +145,21 @@ async function main(): Promise<void> {
 
   if (eventName === "schedule") {
     const scheduledPayload = payload as ScheduledPayload;
+    try {
+      await processScheduledBranchCleanup(octokit, {
+        owner: scheduledPayload.repository.owner.login,
+        repo: scheduledPayload.repository.name
+      });
+    } catch (error) {
+      logger.warn(
+        {
+          error,
+          owner: scheduledPayload.repository.owner.login,
+          repo: scheduledPayload.repository.name
+        },
+        "Scheduled branch cleanup failed."
+      );
+    }
     await processScheduledLenientMerges(octokit, {
       owner: scheduledPayload.repository.owner.login,
       repo: scheduledPayload.repository.name

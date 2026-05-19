@@ -339,6 +339,8 @@ function buildSystemPrompt(mode: ReviewMode): string {
     "When you identify a bug, also check nearby code paths and obvious related regressions, but stay close to what the diff actually makes plausible.",
     "Prefer false negatives over false positives. Do not report a finding unless you can explain a concrete failure mode, misuse case, or broken behavior from the diff itself.",
     "Do not report hypothetical, speculative, low-probability, style-only, architecture-preference, or vague maintainability concerns.",
+    "When reviewing branch cleanup logic, judge the ordinary feature-branch case first. Do not block the change by bringing in extreme repository-specific examples such as shared long-lived branches or unusual protected branch workflows unless the diff is explicitly about those cases.",
+    "If a concern is really about a repository-specific exception, prefer a configurable skip list or existing branch protection instead of rejecting the feature for the common case.",
     "Set shouldClosePullRequest=true only for clearly malicious code: backdoors, credential theft, token exfiltration, destructive commands, malware, hidden persistence, privilege escalation, supply-chain compromise, or intentionally abusive behavior.",
     "Do not set shouldClosePullRequest=true for ordinary bugs, crashes, failing tests, incomplete code, suspicious-but-unproven code, or low-quality changes.",
     "When shouldClosePullRequest=true, explain the evidence in closeReason. Otherwise closeReason must be an empty string.",

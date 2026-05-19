@@ -70,6 +70,10 @@ on:
         required: false
         type: string
         default: "120000"
+      branch_cleanup_skip_branches:
+        required: false
+        type: string
+        default: ""
       log_level:
         required: false
         type: string
@@ -142,6 +146,7 @@ jobs:
           MERGE_METHOD: ${{ inputs.merge_method }}
           REQUIRE_CHECKS: ${{ inputs.require_checks }}
           MAX_PATCH_CHARS: ${{ inputs.max_patch_chars }}
+          BRANCH_CLEANUP_SKIP_BRANCHES: ${{ inputs.branch_cleanup_skip_branches }}
           LOG_LEVEL: ${{ inputs.log_level }}
           GHBOT_EVENT_NAME: ${{ inputs.event_name }}
           GHBOT_EVENT_ACTION: ${{ inputs.event_action }}
@@ -193,6 +198,7 @@ jobs:
           MERGE_METHOD: ${{ inputs.merge_method }}
           REQUIRE_CHECKS: ${{ inputs.require_checks }}
           MAX_PATCH_CHARS: ${{ inputs.max_patch_chars }}
+          BRANCH_CLEANUP_SKIP_BRANCHES: ${{ inputs.branch_cleanup_skip_branches }}
           LOG_LEVEL: ${{ inputs.log_level }}
           GHBOT_EVENT_NAME: schedule
           GHBOT_EVENT_ACTION: schedule
