@@ -175,6 +175,28 @@ export async function processScheduledBranchCleanup(
       continue;
     }
 
+    const hasOtherOpenPullRequestWithSameRef = pullRequests.some((candidate) => {
+      return (
+        candidate.number !== pullRequest.number &&
+        candidate.state === "open" &&
+        candidate.head?.ref === pullRequest.head.ref &&
+        candidate.head.repo?.full_name === `${params.owner}/${params.repo}`
+      );
+    });
+
+    if (hasOtherOpenPullRequestWithSameRef) {
+      logger.info(
+        {
+          owner: params.owner,
+          repo: params.repo,
+          branch: pullRequest.head.ref,
+          pullNumber: pullRequest.number
+        },
+        "Skipping branch cleanup because another open pull request still uses the same head ref."
+      );
+      continue;
+    }
+
     if (pullRequest.merged_at) {
       await deleteBranchIfPresent(octokit, {
         owner: params.owner,
