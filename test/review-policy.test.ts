@@ -11,6 +11,7 @@ import {
   parseReviewStateMarker
 } from "../src/review/policy.js";
 import { config } from "../src/config.js";
+import { isRecheckComment } from "../src/review/processor.js";
 
 const cleanDecision: ReviewDecision = {
   review: [],
@@ -25,7 +26,8 @@ const cleanDecision: ReviewDecision = {
 };
 
 test("clean reviews approve under the default policy", () => {
-  assert.equal(config.reviewPolicy, "require_approval");
+  assert.equal(config.reviewPolicy, "allow");
+  assert.equal(config.reviewStrictness, "normal");
   assert.deepEqual(evaluateReviewDecision(cleanDecision), {
     event: "APPROVE",
     blocksMerge: false,
@@ -34,15 +36,15 @@ test("clean reviews approve under the default policy", () => {
   });
 });
 
-test("ordinary review notes require administrator approval by default", () => {
+test("ordinary review notes approve under the default policy", () => {
   const decision = {
     ...cleanDecision,
     review: [{ path: "src/a.ts", line: 1, title: "Check this", body: "Concrete note" }]
   };
   assert.deepEqual(evaluateReviewDecision(decision), {
-    event: "COMMENT",
+    event: "APPROVE",
     blocksMerge: false,
-    requiresAdminApproval: true,
+    requiresAdminApproval: false,
     outcome: "pass"
   });
 });
@@ -94,11 +96,15 @@ test("review state markers round trip", () => {
   });
   assert.deepEqual(
     parseReviewStateMarker(formatReviewStateMarker("strict", disposition, 1, 0)),
-    { mode: "strict", outcome: "pass", requiresAdminApproval: true }
+    { mode: "strict", outcome: "pass", requiresAdminApproval: false }
   );
   assert.deepEqual(
-    parseReviewExternalId(formatReviewExternalId("lenient", disposition)),
-    { mode: "lenient", outcome: "pass", requiresAdminApproval: true }
+    parseReviewExternalId(formatReviewExternalId("normal", disposition)),
+    { mode: "normal", outcome: "pass", requiresAdminApproval: false }
+  );
+  assert.deepEqual(
+    parseReviewExternalId("ghbot-review:v1:mode=lenient:outcome=pass:requires-admin=false"),
+    { mode: "normal", outcome: "pass", requiresAdminApproval: false }
   );
 });
 
@@ -108,6 +114,13 @@ test("branch glob stars respect slash boundaries", () => {
   assert.equal(branchPatternToRegExp("release/*").test("release/mobile/1.0"), false);
   assert.equal(branchPatternToRegExp("release/**").test("release/mobile/1.0"), true);
   assert.equal(branchPatternToRegExp("release/?.x").test("release/1.x"), true);
+});
+
+test("only the exact recheck command triggers a manual review", () => {
+  assert.equal(isRecheckComment("/recheck"), true);
+  assert.equal(isRecheckComment("  /recheck\n"), true);
+  assert.equal(isRecheckComment("/lenient-check"), false);
+  assert.equal(isRecheckComment("/recheck something"), false);
 });
 
 test("only the latest decisive review per user can approve the current head", () => {

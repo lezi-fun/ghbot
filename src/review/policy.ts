@@ -106,13 +106,13 @@ export function parseReviewExternalId(value: string | null | undefined): BotRevi
     return null;
   }
 
-  const match = /^ghbot-review:v1:mode=(strict|lenient):outcome=(pass|block):requires-admin=(true|false)$/.exec(value);
+  const match = /^ghbot-review:v1:mode=(strict|normal|lenient):outcome=(pass|block):requires-admin=(true|false)$/.exec(value);
   if (!match) {
     return null;
   }
 
   return {
-    mode: match[1] as ReviewMode,
+    mode: normalizeReviewMode(match[1]),
     outcome: match[2] as "pass" | "block",
     requiresAdminApproval: match[3] === "true"
   };
@@ -123,16 +123,20 @@ export function parseReviewStateMarker(body: string | null | undefined): BotRevi
     return null;
   }
 
-  const match = /<!-- ghbot-review:v1 mode=(strict|lenient) outcome=(pass|block) requires-admin=(true|false) review=\d+ change=\d+ -->/.exec(body);
+  const match = /<!-- ghbot-review:v1 mode=(strict|normal|lenient) outcome=(pass|block) requires-admin=(true|false) review=\d+ change=\d+ -->/.exec(body);
   if (!match) {
     return null;
   }
 
   return {
-    mode: match[1] as ReviewMode,
+    mode: normalizeReviewMode(match[1]),
     outcome: match[2] as "pass" | "block",
     requiresAdminApproval: match[3] === "true"
   };
+}
+
+function normalizeReviewMode(value: string): ReviewMode {
+  return value === "strict" ? "strict" : "normal";
 }
 
 export function branchPatternToRegExp(pattern: string): RegExp {

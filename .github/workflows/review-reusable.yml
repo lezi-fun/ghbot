@@ -77,7 +77,11 @@ on:
       review_policy:
         required: false
         type: string
-        default: require_approval
+        default: allow
+      review_strictness:
+        required: false
+        type: string
+        default: normal
       review_instructions:
         required: false
         type: string
@@ -86,6 +90,14 @@ on:
         required: false
         type: string
         default: ""
+      repository_knowledge_enabled:
+        required: false
+        type: string
+        default: "true"
+      repository_knowledge_write:
+        required: false
+        type: string
+        default: "false"
       triage_enabled:
         required: false
         type: string
@@ -110,6 +122,14 @@ on:
         required: false
         type: string
         default: "false"
+      auto_resolve_conflicts:
+        required: false
+        type: string
+        default: "false"
+      conflict_test_command:
+        required: false
+        type: string
+        default: ""
       merge_method:
         required: false
         type: string
@@ -167,8 +187,8 @@ jobs:
           repository: lezi-fun/ghbot
           ref: main
           path: ghbot-runtime
-      - name: Check out current PR source for comment chat
-        if: ${{ inputs.event_name == 'issue_comment' }}
+      - name: Check out current PR source for agent tasks
+        if: ${{ inputs.event_name == 'issue_comment' || (inputs.event_name == 'pull_request_target' && inputs.event_action != 'closed' && inputs.auto_resolve_conflicts == 'true') }}
         uses: actions/checkout@v4
         with:
           repository: ${{ inputs.repository_owner }}/${{ inputs.repository_name }}
@@ -193,6 +213,13 @@ jobs:
         working-directory: ghbot-runtime
       - run: npm run build
         working-directory: ghbot-runtime
+      - name: Restore repository knowledge
+        uses: actions/cache@v4
+        with:
+          path: ghbot-runtime/.ghbot-knowledge/repository.md
+          key: ghbot-knowledge-${{ github.repository_id }}-${{ github.run_id }}
+          restore-keys: |
+            ghbot-knowledge-${{ github.repository_id }}-
       - name: Restore previous PR review
         if: ${{ inputs.event_name == 'pull_request_target' && inputs.event_action != 'closed' }}
         uses: actions/cache@v4
@@ -213,8 +240,11 @@ jobs:
           GOOSE_MODEL: ${{ inputs.goose_model || inputs.opencode_model }}
           GOOSE_THINKING_EFFORT: ${{ inputs.goose_thinking_effort || inputs.opencode_reasoning_effort }}
           REVIEW_POLICY: ${{ inputs.review_policy }}
+          REVIEW_STRICTNESS: ${{ inputs.review_strictness }}
           REVIEW_INSTRUCTIONS: ${{ inputs.review_instructions }}
           REVIEW_BRANCHES: ${{ inputs.review_branches }}
+          REPOSITORY_KNOWLEDGE_ENABLED: ${{ inputs.repository_knowledge_enabled }}
+          REPOSITORY_KNOWLEDGE_WRITE: ${{ inputs.repository_knowledge_write }}
           TRIAGE_ENABLED: ${{ inputs.triage_enabled }}
           TRIAGE_LABELS: ${{ inputs.triage_labels }}
           TRIAGE_DUPLICATE_LABEL: ${{ inputs.triage_duplicate_label }}
@@ -222,6 +252,8 @@ jobs:
           TRIAGE_INSTRUCTIONS: ${{ inputs.triage_instructions }}
           BOT_NAME: ${{ inputs.bot_name }}
           AUTO_MERGE: ${{ inputs.auto_merge }}
+          AUTO_RESOLVE_CONFLICTS: ${{ inputs.auto_resolve_conflicts }}
+          CONFLICT_TEST_COMMAND: ${{ inputs.conflict_test_command }}
           MERGE_METHOD: ${{ inputs.merge_method }}
           REQUIRE_CHECKS: ${{ inputs.require_checks }}
           MAX_PATCH_CHARS: ${{ inputs.max_patch_chars }}
@@ -266,6 +298,13 @@ jobs:
         working-directory: ghbot-runtime
       - run: npm run build
         working-directory: ghbot-runtime
+      - name: Restore repository knowledge
+        uses: actions/cache@v4
+        with:
+          path: ghbot-runtime/.ghbot-knowledge/repository.md
+          key: ghbot-knowledge-${{ github.repository_id }}-${{ github.run_id }}
+          restore-keys: |
+            ghbot-knowledge-${{ github.repository_id }}-
       - run: node dist/src/actions/runReview.js
         working-directory: ghbot-runtime
         env:
@@ -278,8 +317,11 @@ jobs:
           GOOSE_MODEL: ${{ inputs.goose_model || inputs.opencode_model }}
           GOOSE_THINKING_EFFORT: ${{ inputs.goose_thinking_effort || inputs.opencode_reasoning_effort }}
           REVIEW_POLICY: ${{ inputs.review_policy }}
+          REVIEW_STRICTNESS: ${{ inputs.review_strictness }}
           REVIEW_INSTRUCTIONS: ${{ inputs.review_instructions }}
           REVIEW_BRANCHES: ${{ inputs.review_branches }}
+          REPOSITORY_KNOWLEDGE_ENABLED: ${{ inputs.repository_knowledge_enabled }}
+          REPOSITORY_KNOWLEDGE_WRITE: ${{ inputs.repository_knowledge_write }}
           TRIAGE_ENABLED: ${{ inputs.triage_enabled }}
           TRIAGE_LABELS: ${{ inputs.triage_labels }}
           TRIAGE_DUPLICATE_LABEL: ${{ inputs.triage_duplicate_label }}
@@ -287,6 +329,8 @@ jobs:
           TRIAGE_INSTRUCTIONS: ${{ inputs.triage_instructions }}
           BOT_NAME: ${{ inputs.bot_name }}
           AUTO_MERGE: ${{ inputs.auto_merge }}
+          AUTO_RESOLVE_CONFLICTS: ${{ inputs.auto_resolve_conflicts }}
+          CONFLICT_TEST_COMMAND: ${{ inputs.conflict_test_command }}
           MERGE_METHOD: ${{ inputs.merge_method }}
           REQUIRE_CHECKS: ${{ inputs.require_checks }}
           MAX_PATCH_CHARS: ${{ inputs.max_patch_chars }}

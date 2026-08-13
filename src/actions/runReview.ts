@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { config } from "../config.js";
-import { createGitHubClient } from "../github/client.js";
+import { createGitHubCredentials } from "../github/client.js";
 import { logger } from "../logger.js";
 import { withRetry } from "../retry.js";
 import { processPullRequestChat } from "../chat/processor.js";
@@ -8,9 +8,9 @@ import { processIssueTriage, processPullRequestTriage } from "../triage/processo
 import { deleteLocalReviewCache } from "../review/cache.js";
 import {
   cleanupPullRequestReviewCache,
-  processLenientCheckComment,
+  processRecheckComment,
   processPullRequest,
-  processScheduledLenientMerges,
+  processScheduledPendingMerges,
   processPullRequestReviewApproval,
   shouldReviewPullRequest
 } from "../review/processor.js";
@@ -83,10 +83,11 @@ async function main(): Promise<void> {
     ? buildPayloadFromWorkflowCallEnv(workflowCallEventName)
     : readPayloadFromGitHubEventPath();
   const repository = payload.repository;
-  const octokit = await createGitHubClient({
+  const github = await createGitHubCredentials({
     owner: repository.owner.login,
     repo: repository.name
   });
+  const octokit = github.octokit;
   const eventName = workflowCallEventName ?? process.env.GITHUB_EVENT_NAME;
 
   if (!eventName) {
@@ -146,7 +147,12 @@ async function main(): Promise<void> {
       });
     }
 
-    await processPullRequest(octokit, ref, "strict");
+    await processPullRequest(
+      octokit,
+      ref,
+      config.reviewStrictness === "strict" ? "strict" : "normal",
+      github.token
+    );
     return;
   }
 
@@ -169,12 +175,13 @@ async function main(): Promise<void> {
       return;
     }
 
-    await processLenientCheckComment(octokit, {
+    await processRecheckComment(octokit, {
       owner: commentPayload.repository.owner.login,
       repo: commentPayload.repository.name,
       pullNumber: commentPayload.issue.number,
       commenterLogin: commentPayload.comment.user.login,
-      commentBody: commentPayload.comment.body
+      commentBody: commentPayload.comment.body,
+      gitToken: github.token
     });
     await processPullRequestChat(octokit, {
       owner: commentPayload.repository.owner.login,
@@ -208,7 +215,7 @@ async function main(): Promise<void> {
 
   if (eventName === "schedule") {
     const scheduledPayload = payload as ScheduledPayload;
-    await processScheduledLenientMerges(octokit, {
+    await processScheduledPendingMerges(octokit, {
       owner: scheduledPayload.repository.owner.login,
       repo: scheduledPayload.repository.name
     });

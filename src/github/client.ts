@@ -7,6 +7,13 @@ export async function createGitHubClient(params?: {
   owner: string;
   repo: string;
 }): Promise<Octokit> {
+  return (await createGitHubCredentials(params)).octokit;
+}
+
+export async function createGitHubCredentials(params?: {
+  owner: string;
+  repo: string;
+}): Promise<{ octokit: Octokit; token: string }> {
   if (config.githubAppId && config.githubAppPrivateKey) {
     try {
       const privateKey = normalizePrivateKey(config.githubAppPrivateKey);
@@ -28,9 +35,10 @@ export async function createGitHubClient(params?: {
         installationId
       });
 
-      return new Octokit({
-        auth: installationAuthentication.token
-      });
+      return {
+        octokit: new Octokit({ auth: installationAuthentication.token }),
+        token: installationAuthentication.token
+      };
     } catch (error) {
       logger.warn(
         {
@@ -51,9 +59,10 @@ export async function createGitHubClient(params?: {
     );
   }
 
-  return new Octokit({
-    auth: config.githubToken
-  });
+  return {
+    octokit: new Octokit({ auth: config.githubToken }),
+    token: config.githubToken
+  };
 }
 
 function normalizePrivateKey(value: string): string {

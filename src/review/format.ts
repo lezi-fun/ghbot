@@ -16,7 +16,7 @@ export function formatReviewBody(
     formatReviewStateMarker(mode, disposition, decision.review.length, decision.change.length),
     `## Automated review`,
     "",
-    `Mode: ${mode === "lenient" ? "lenient" : "strict"}`,
+    `Mode: ${mode}`,
     "",
     `### Comment`,
     "",
@@ -37,8 +37,8 @@ export function formatReviewBody(
     `Review notes: ${decision.review.length}`
   ];
 
-  if (mode === "strict" && decision.change.length > 0 && !decision.result.shouldClosePullRequest) {
-    lines.push("", "Need a narrower pass? Comment `/lenient-check` on this PR.");
+  if (decision.change.length > 0 && !decision.result.shouldClosePullRequest) {
+    lines.push("", "After updating the pull request, comment `/recheck` to run the review again.");
   }
 
   if (unpostedFindings.length > 0) {

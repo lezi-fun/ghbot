@@ -16,10 +16,10 @@ goose returns exactly four sections:
 Only `change` is always a required change. How ordinary `review` notes affect merge is configured with `REVIEW_POLICY`:
 
 - `allow`: review notes do not block merge. A clean result is submitted as `APPROVE`.
-- `require_approval` (default): review notes are submitted as `COMMENT`; the `ghbot review` check remains `action_required` until a repository administrator approves the current head commit.
+- `require_approval`: review notes are submitted as `COMMENT`; the `ghbot review` check remains `action_required` until a repository administrator approves the current head commit.
 - `reject`: any review note is submitted as `REQUEST_CHANGES` and blocks merge.
 
-Required changes and malicious code block under every policy. Clearly malicious pull requests can be commented on and closed automatically. Start with `AUTO_MERGE=false` until the review behavior is trusted.
+The default is `allow`. Required changes and malicious code block under every policy. Clearly malicious pull requests can be commented on and closed automatically. Start with `AUTO_MERGE=false` until the review behavior is trusted.
 
 ### Repository-specific rules
 
@@ -27,6 +27,7 @@ Use repository Actions variables to customize a caller repository:
 
 - `REVIEW_INSTRUCTIONS`: additional repository-specific review requirements, such as testing, compatibility, architecture, or release rules.
 - `REVIEW_BRANCHES`: comma-separated base-branch globs. Empty reviews all target branches. Example: `main,develop,release/**`.
+- `REVIEW_STRICTNESS`: `normal` by default, or `strict` for a thorough repository-policy review. Normal mode avoids nitpicks and reports only clear runtime, build, test, security, data-loss, or important user-facing regressions.
 - `MAX_PATCH_CHARS`: maximum total patch text sent for review; default `120000`.
 
 `REVIEW_BRANCHES` matches the pull request's target (base) branch. `*` does not cross `/`; `**` does. The workflow file must be present on the repository's default branch for `pull_request_target`, but that does not limit reviews to PRs targeting the default branch. A workflow installed on `main` can review PRs targeting `develop` or release branches. The bot fetches each PR and its diff by PR number and never executes code from the PR head.
@@ -44,6 +45,15 @@ Each successful review stores this metadata in GitHub Actions cache:
 When a new commit triggers `synchronize`, or PR metadata/base changes trigger `edited`, the latest cache for that PR is restored. goose receives an earlier-head result plus the current complete PR patch, revalidates old findings, removes fixed findings, and checks the newest content. The previous merge decision is never reused without a fresh review. An `edited` event on the same head still runs a fresh complete review so title, description, and base-branch changes are respected.
 
 Cache keys are isolated by repository ID and PR number. A `closed` event, including a merged PR, deletes all remote caches for that PR and removes the local cache file. Cache data contains no API keys, full diff, or prompt.
+
+### Self-improving repository knowledge cache
+
+ghbot can retain a concise repository knowledge file in GitHub Actions cache. It is isolated by repository ID and separate from each PR review cache, so it survives PR close and merge events. Automatic review can use durable facts such as architecture, supported environments, trusted validation commands, conventions, and recurring pitfalls.
+
+- `REPOSITORY_KNOWLEDGE_ENABLED`: restore and use repository knowledge; default `true`.
+- `REPOSITORY_KNOWLEDGE_WRITE`: allow an authorized `@bot` goose Agent to improve the cached knowledge; default `false`.
+
+The Agent edits only a scratch copy at `.ghbot/repository-knowledge.md`. ghbot validates the result, rejects credentials/private keys and content over 32 KiB, then copies it to `.ghbot-knowledge/repository.md` in the reusable-workflow runtime. `actions/cache` persists that file under a repository-scoped key. It is never committed to the caller repository, and the Agent still receives no GitHub credentials.
 
 ## Issue and PR triage
 
@@ -78,6 +88,16 @@ The snapshot excludes Git metadata, repository goose/OpenCode/agent instruction 
 
 Replies are keyed to the source comment so a workflow rerun does not post the same answer twice, and bot-authored replies are ignored to prevent loops.
 
+When repository knowledge writing is enabled, the Agent may improve its scratch knowledge file only with verified, durable repository facts. Repositories evolve, so it must revise or delete entries that current code, tests, or configuration prove outdated, replaced, contradictory, or no longer true instead of only appending history. Temporary PR conclusions, speculative claims, credentials, personal data, and instructions that weaken security are forbidden. Current repository evidence always takes precedence over cached knowledge.
+
+## Automatic conflict resolution
+
+Set `AUTO_RESOLVE_CONFLICTS=true` to allow goose to repair a PR that passed review but GitHub reports as `mergeable=false` with `mergeable_state=dirty`. This is independent of `AUTO_MERGE`; conflict repair can be enabled while automatic merging remains disabled.
+
+Conflict repair applies only to a current-head PR branch in the same repository. External forks, stale heads, non-dirty states, and failed reviews are skipped. ghbot creates the merge locally, gives goose a sanitized credential-free snapshot, and allows it to change direct conflict files plus related callers, types, tests, lockfiles, configuration, or documentation when necessary for compatibility. Protected agent/configuration and credential paths are rejected.
+
+After applying the proposed files, ghbot verifies there are no unmerged paths and runs `git diff --check`. A second isolated goose pass reviews the complete staged diff and, when configured, runs the trusted `CONFLICT_TEST_COMMAND`. The result is committed and pushed only when that final pass returns `safeToCommit=true` and the remote PR head still matches the reviewed SHA. ghbot never force-pushes. The new commit triggers a fresh `synchronize` review; the old decision is not reused as approval.
+
 ## goose configuration
 
 Required secret:
@@ -96,7 +116,7 @@ The workflow installs the pinned goose CLI `v1.46.0`. Review and triage run with
 goose run --no-session --no-profile --quiet --output-format json --provider openai --model <model> --text <prompt>
 ```
 
-The goose process gets isolated home/config/data/state directories, disables profiles and repository context files, and uses `GOOSE_MODE=chat` for automatic review and triage so no tools can run. Only authorized PR comment chat uses the Developer extension inside the disposable container.
+The goose process gets isolated home/config/data/state directories, disables profiles and repository context files, and uses `GOOSE_MODE=chat` for automatic review and triage so no tools can run. Authorized PR comment chat and the two conflict-resolution passes use the Developer extension inside disposable containers.
 
 For migration, the runtime and workflows still accept `OPENCODE_API_KEY`, `OPENCODE_BASE_URL`, `OPENCODE_MODEL`, and `OPENCODE_REASONING_EFFORT` as fallback aliases. New repositories should use the `GOOSE_*` names.
 
@@ -122,6 +142,7 @@ For a GitHub App, configure these repository permissions:
 - Checks: read and write
 - Commit statuses: read-only
 - Metadata: read-only
+- Workflows: read and write only if conflict resolution may update workflow files
 
 Add App credentials as optional repository secrets:
 
@@ -151,15 +172,15 @@ secrets:
 
 See the checked-in wrapper for all `with:` inputs and repository-variable mappings.
 
-## Lenient review
+## Manual recheck
 
 An eligible repository user can comment:
 
 ```text
-/lenient-check
+/recheck
 ```
 
-The bot reruns review with runtime, build, data-loss, and security focus. If an administrator has responded within the previous 24 hours, only an administrator may request or approve the lenient result; otherwise users with `write`, `maintain`, or `admin` permission are eligible. An hourly scheduled job rechecks pending approvals.
+The bot reruns the complete current PR review using the repository's configured `REVIEW_STRICTNESS`. Only users with `write`, `maintain`, or `admin` permission can request it. The old `/lenient-check` command is no longer accepted.
 
 ## Local development
 
@@ -175,4 +196,4 @@ For local event simulation, install goose `v1.46.0` and export the variables in 
 node dist/src/actions/runReview.js
 ```
 
-The bot reviews GitHub-provided diffs and status data. It intentionally does not check out or execute untrusted pull request code under `pull_request_target`.
+Normal automatic review and triage use GitHub-provided diffs without executing PR code. When conflict resolution is explicitly enabled, PR code and the configured validation command run only inside sanitized disposable containers without GitHub credentials.

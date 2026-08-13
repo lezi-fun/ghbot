@@ -38,12 +38,14 @@ test("PR chat snapshot excludes repository instructions, secrets, git data, and 
     await fs.mkdir(path.join(source, ".goose"));
     await fs.mkdir(path.join(source, ".opencode"));
     await fs.mkdir(path.join(source, ".agents"));
+    await fs.mkdir(path.join(source, ".ghbot"));
     await fs.mkdir(path.join(source, "src"));
     await Promise.all([
       fs.writeFile(path.join(source, ".git", "config"), "credential data"),
       fs.writeFile(path.join(source, ".goose", "config.yaml"), "untrusted goose config"),
       fs.writeFile(path.join(source, ".opencode", "plugin.ts"), "untrusted plugin"),
       fs.writeFile(path.join(source, ".agents", "SKILL.md"), "untrusted skill"),
+      fs.writeFile(path.join(source, ".ghbot", "repository-knowledge.md"), "untrusted knowledge"),
       fs.writeFile(path.join(source, ".env"), "TOKEN=secret"),
       fs.writeFile(path.join(source, ".env.local"), "TOKEN=local-secret"),
       fs.writeFile(path.join(source, "AGENTS.md"), "untrusted instructions"),
@@ -60,6 +62,7 @@ test("PR chat snapshot excludes repository instructions, secrets, git data, and 
       ".goose",
       ".opencode",
       ".agents",
+      ".ghbot",
       ".env",
       ".env.local",
       "AGENTS.md",

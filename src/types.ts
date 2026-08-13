@@ -31,7 +31,7 @@ export type ReviewDecision = {
   };
 };
 
-export type ReviewMode = "strict" | "lenient";
+export type ReviewMode = "strict" | "normal";
 
 export type DiffPosition = {
   path: string;

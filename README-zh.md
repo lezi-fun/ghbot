@@ -16,10 +16,10 @@ goose 的审核结果固定包含四个顶层字段：
 `change` 在任何策略下都会阻止合并。普通 `review` 如何影响合并由仓库 Actions Variable `REVIEW_POLICY` 决定：
 
 - `allow`：允许存在普通审核意见；没有 `change` 时提交 `APPROVE`。
-- `require_approval`：默认值。允许存在普通审核意见，但 `ghbot review` check 保持 `action_required`，直到仓库管理员批准当前 head commit。
+- `require_approval`：允许存在普通审核意见，但 `ghbot review` check 保持 `action_required`，直到仓库管理员批准当前 head commit。
 - `reject`：只要存在普通审核意见就提交 `REQUEST_CHANGES` 并阻止合并。
 
-如果模型识别到明确的后门、凭证窃取、恶意持久化、破坏命令或供应链攻击，机器人可以评论原因并自动关闭 PR。普通 bug、测试失败或可疑但无法证明恶意的代码不会触发自动关闭。建议先保持 `AUTO_MERGE=false`，确认审核质量后再开启自动合并。
+默认策略是 `allow`。如果模型识别到明确的后门、凭证窃取、恶意持久化、破坏命令或供应链攻击，机器人可以评论原因并自动关闭 PR。普通 bug、测试失败或可疑但无法证明恶意的代码不会触发自动关闭。建议先保持 `AUTO_MERGE=false`，确认审核质量后再开启自动合并。
 
 要让 `require_approval` 或 `reject` 同时阻止人工合并，需要在目标分支的 Ruleset 或 Branch protection 中把 `ghbot review` 设置为 required status check。否则机器人仍会报告 `action_required`，但 GitHub 可能允许有权限的用户手工合并。
 
@@ -29,11 +29,12 @@ goose 的审核结果固定包含四个顶层字段：
 
 - `REVIEW_INSTRUCTIONS`：该仓库额外的测试、兼容性、架构或发布审核规则。
 - `REVIEW_BRANCHES`：需要审核的 PR 目标分支 glob，以逗号分隔；留空表示全部分支。例如 `main,develop,release/**`。
+- `REVIEW_STRICTNESS`：默认 `normal`；设为 `strict` 才会全面严格检查。普通模式不吹毛求疵，只报告明确的运行、构建、测试、安全、数据丢失或重要用户体验回归。
 - `MAX_PATCH_CHARS`：单次发送给模型的最大 patch 字符数，默认 `120000`。
 
 `REVIEW_BRANCHES` 匹配 PR 的 base branch。`*` 不跨越 `/`，`**` 可以跨越 `/`。workflow 文件需要存在于仓库默认分支，但这不表示只能审核指向默认分支的 PR；例如 workflow 位于 `main` 时，仍可审核目标为 `develop` 或 `release/1.x` 的 PR。
 
-ghbot 使用 GitHub API 按 PR 编号读取 metadata、完整文件列表和 diff，不会在自动审核路径中 checkout 或执行不可信 PR 代码。来自 fork 或没有仓库权限的外部贡献者也会正常得到自动审核。
+普通自动审核使用 GitHub API 按 PR 编号读取 metadata、完整文件列表和 diff，不执行不可信 PR 代码。只有显式开启冲突修复时才 checkout PR head，而且执行和测试都在无 GitHub 凭据的一次性净化容器中完成。来自 fork 或没有仓库权限的外部贡献者仍会正常得到自动审核，但不会被自动推送冲突修复。
 
 ## 增量审核缓存
 
@@ -46,6 +47,15 @@ ghbot 使用 GitHub API 按 PR 编号读取 metadata、完整文件列表和 dif
 新 commit 触发 `synchronize` 后，workflow 会恢复该 PR 最新的缓存。goose 同时收到旧审核结果和当前完整 PR diff，重新验证所有旧问题、移除已经修复的问题，并检查新 commit 引入的回归。旧的合并结论不会在没有新审核的情况下直接复用。
 
 PR 标题、描述或 base branch 变化触发 `edited` 时也会重新审核。PR 被关闭或合并后，机器人会删除本地缓存文件，并通过 Actions Cache API 删除该 PR 的远端缓存。缓存不保存 API key、完整 diff 或 prompt。
+
+## 可自我改进的仓库认知缓存
+
+ghbot 可以把一份简洁的仓库认知文件保存在 GitHub Actions cache 中。它按仓库 ID 隔离，与单个 PR 的审核缓存分开，因此 PR 关闭或合并时不会删除。自动审核可以参考其中长期有效的架构、支持环境、可信测试命令、代码约定和常见坑。
+
+- `REPOSITORY_KNOWLEDGE_ENABLED`：恢复并使用仓库认知，默认 `true`。
+- `REPOSITORY_KNOWLEDGE_WRITE`：允许有权限的 `@bot` goose Agent 改进认知缓存，默认 `false`。
+
+Agent 只能编辑临时快照中的 `.ghbot/repository-knowledge.md` 草稿。ghbot 会校验内容，拒绝凭证、私钥和超过 32 KiB 的内容，再把它复制到 reusable workflow runtime 的 `.ghbot-knowledge/repository.md`，由 `actions/cache` 用仓库级 key 持久化。它不会提交到业务仓库，Agent 仍然拿不到 GitHub 凭证。
 
 ## Issue 和 PR 分类
 
@@ -92,6 +102,16 @@ Agent 在一次性 Docker 容器中运行：
 
 每条回复都按源评论 ID 去重，workflow 重跑不会重复回答；机器人自己的回复会被忽略，避免自触发循环。
 
+启用认知写入后，Agent 只有发现已验证、长期有效的仓库事实时才能更新草稿。仓库会持续变化，因此当前代码、测试或配置证明旧记录已经过时、被替代、互相冲突或不再成立时，必须主动修改或删除旧条目，而不是只追加历史。不得记录临时 PR 结论、推测、凭证、个人信息或降低安全性的指令；当前仓库证据始终优先于缓存认知。
+
+## 自动解决合并冲突
+
+设置 `AUTO_RESOLVE_CONFLICTS=true` 后，如果 AI 审核已经通过，但 GitHub 报告 `mergeable=false` 且 `mergeable_state=dirty`，goose 可以自动解决冲突。它与 `AUTO_MERGE` 相互独立，因此可以只开启冲突修复而继续禁止自动合并。
+
+仅处理当前 head 未变化且 PR 分支位于同一仓库的情况；外部 fork、旧 head、非冲突状态和未通过审核的 PR 都会跳过。ghbot 在宿主生成本地 merge，再把无 `.git`、无凭据的净化快照交给 goose。goose 可以修改直接冲突文件，也可以在兼容性确有需要时调整相关调用方、类型、测试、lockfile、配置或文档；受保护的 Agent 配置和凭证路径会被拒绝。
+
+应用改动后，ghbot 检查未合并路径和 `git diff --check`。第二次隔离 goose 会审核完整 staged diff，并在配置后运行可信的 `CONFLICT_TEST_COMMAND`。只有第二次确认明确返回 `safeToCommit=true`，且远端 PR head 仍与审核 SHA 相同，才会创建普通 merge commit 并 push；绝不 force-push。新 commit 会触发 `synchronize` 并重新完整审核，不会把修复前的结论直接当作批准。
+
 ## goose 配置
 
 必须添加 Actions Secret：
@@ -104,7 +124,7 @@ Agent 在一次性 Docker 容器中运行：
 - `GOOSE_MODEL`：默认 `gpt-5.4`。
 - `GOOSE_THINKING_EFFORT`：可选 `off`、`low`、`medium`、`high`、`max`，workflow 默认 `high`。
 
-workflow 安装固定版本 goose CLI `v1.46.0`。普通审核和分类使用 `GOOSE_MODE=chat`，不加载扩展也不执行工具；只有通过权限检查的 PR comment Agent 在一次性 Docker 容器中启用 Developer 扩展和自动工具权限。
+workflow 安装固定版本 goose CLI `v1.46.0`。普通审核和分类使用 `GOOSE_MODE=chat`，不加载扩展也不执行工具；通过权限检查的 PR comment Agent，以及冲突修复和最终确认，会在一次性 Docker 容器中启用 Developer 扩展。
 
 迁移期间仍兼容 `OPENCODE_API_KEY`、`OPENCODE_BASE_URL`、`OPENCODE_MODEL`、`OPENCODE_REASONING_EFFORT`，但新仓库应使用 `GOOSE_*` 名称。
 
@@ -130,6 +150,7 @@ GitHub App 建议配置以下 Repository permissions：
 - Checks：Read and write
 - Commit statuses：Read-only
 - Metadata：Read-only
+- Workflows：仅当允许冲突修复修改 workflow 文件时设为 Read and write
 
 可选 App Secrets：
 
@@ -161,15 +182,15 @@ secrets:
 
 完整的 `with:` 输入和 Repository Variables 映射请参考仓库内的 wrapper workflow。
 
-## 宽松审核
+## 手动重新审核
 
 有资格的仓库用户可以在 PR 中评论：
 
 ```text
-/lenient-check
+/recheck
 ```
 
-机器人会重新运行一个只关注危险改动、运行时错误、崩溃、构建或测试破坏、数据丢失和明确安全问题的审核。如果最近 24 小时内有管理员在 PR 中评论或 review，则只有管理员可以请求或批准宽松结果；否则 `write`、`maintain` 或 `admin` 用户都可以操作。每小时 schedule 会重新检查等待批准的 PR。
+机器人会按照仓库当前的 `REVIEW_STRICTNESS` 对最新完整 PR 重新审核。只有具有 `write`、`maintain` 或 `admin` 权限的用户可以触发；旧 `/lenient-check` 命令不再生效。
 
 ## 本地开发
 

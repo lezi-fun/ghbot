@@ -22,13 +22,19 @@ import {
   parseReviewStateMarker
 } from "./policy.js";
 import { compactFilesForReview } from "./prompt.js";
+import { loadRepositoryKnowledge } from "../repository/knowledge.js";
+import { canAutoResolveConflicts, resolvePullRequestConflicts } from "./conflictResolver.js";
 
 const reviewer = new GooseReviewer();
 const CHECK_RUN_NAME = "ghbot review";
-export const LENIENT_COMMENT_COMMAND = "/lenient-check";
-const ADMIN_RESPONSE_WINDOW_MS = 24 * 60 * 60 * 1000;
+export const RECHECK_COMMENT_COMMAND = "/recheck";
 
-export async function processPullRequest(octokit: Octokit, ref: PullRequestRef, mode: ReviewMode = "strict"): Promise<void> {
+export async function processPullRequest(
+  octokit: Octokit,
+  ref: PullRequestRef,
+  mode: ReviewMode = "normal",
+  gitToken?: string
+): Promise<void> {
   const { owner, repo, pullNumber } = ref;
 
   const { data: pullRequest } = await octokit.rest.pulls.get({
@@ -63,12 +69,19 @@ export async function processPullRequest(octokit: Octokit, ref: PullRequestRef, 
     pullNumber,
     currentHeadSha: pullRequest.head.sha
   });
+  const repositoryKnowledge = config.repositoryKnowledgeEnabled
+    ? await loadRepositoryKnowledge().catch((error: unknown) => {
+        logger.warn({ error, owner, repo, pullNumber }, "Ignoring unavailable repository knowledge.");
+        return undefined;
+      })
+    : undefined;
   const decision = await reviewer.review({
     title: pullRequest.title,
     body: pullRequest.body,
     files: compactFiles,
     mode,
-    previousReview
+    previousReview,
+    repositoryKnowledge
   });
 
   const { data: currentPullRequest } = await octokit.rest.pulls.get({
@@ -149,6 +162,64 @@ export async function processPullRequest(octokit: Octokit, ref: PullRequestRef, 
     return;
   }
 
+  const mergeablePullRequest = await waitForMergeable(octokit, owner, repo, pullNumber);
+  const conflictResolutionEligible = canAutoResolveConflicts({
+    enabled: config.autoResolveConflicts,
+    reviewPassed: true,
+    mergeable: mergeablePullRequest.mergeable,
+    mergeableState: mergeablePullRequest.mergeable_state,
+    baseRepository: `${owner}/${repo}`,
+    headRepository: pullRequest.head.repo?.full_name ?? null,
+    expectedHeadSha: pullRequest.head.sha,
+    currentHeadSha: currentPullRequest.head.sha
+  });
+  if (conflictResolutionEligible) {
+    const worktree = process.env.GHBOT_PR_WORKTREE;
+    if (!gitToken || !worktree) {
+      logger.warn(
+        { owner, repo, pullNumber, hasGitToken: Boolean(gitToken), hasWorktree: Boolean(worktree) },
+        "Cannot resolve pull request conflicts without a git token and PR worktree."
+      );
+    } else {
+      try {
+        const resolved = await resolvePullRequestConflicts(octokit, {
+          owner,
+          repo,
+          pullNumber,
+          expectedHeadSha: pullRequest.head.sha,
+          baseBranch: pullRequest.base.ref,
+          headBranch: pullRequest.head.ref,
+          headRepository: pullRequest.head.repo?.full_name ?? null,
+          worktree,
+          gitToken,
+          repositoryKnowledge
+        });
+        if (resolved) {
+          await withRetry("github.issues.createComment.conflictsResolved", async () => {
+            return octokit.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: pullNumber,
+              body: "goose resolved the merge conflicts, validated the final changes, and pushed a new commit. The new head will be reviewed again before any merge decision."
+            });
+          });
+          return;
+        }
+      } catch (error) {
+        logger.error({ error, owner, repo, pullNumber }, "Automatic conflict resolution failed safely.");
+        await withRetry("github.issues.createComment.conflictResolutionFailed", async () => {
+          return octokit.rest.issues.createComment({
+            owner,
+            repo,
+            issue_number: pullNumber,
+            body: "Automated review passed, but goose could not safely resolve and validate the merge conflicts. No conflict-resolution commit was pushed."
+          });
+        });
+        return;
+      }
+    }
+  }
+
   await maybeMergePullRequest(octokit, {
     owner,
     repo,
@@ -157,11 +228,12 @@ export async function processPullRequest(octokit: Octokit, ref: PullRequestRef, 
     headSha: pullRequest.head.sha,
     mode,
     requireAdminApproval: disposition.requiresAdminApproval,
-    emitStatusComments: true
+    emitStatusComments: true,
+    mergeablePullRequest
   });
 }
 
-export async function processScheduledLenientMerges(
+export async function processScheduledPendingMerges(
   octokit: Octokit,
   params: {
     owner: string;
@@ -169,7 +241,7 @@ export async function processScheduledLenientMerges(
   }
 ): Promise<void> {
   if (!config.autoMerge) {
-    logger.info({ owner: params.owner, repo: params.repo }, "Skipping scheduled lenient recheck because AUTO_MERGE is disabled.");
+    logger.info({ owner: params.owner, repo: params.repo }, "Skipping scheduled pending merge check because AUTO_MERGE is disabled.");
     return;
   }
 
@@ -196,22 +268,16 @@ export async function processScheduledLenientMerges(
       continue;
     }
 
-    if (latestReviewOutcome.mode !== "lenient" && !latestReviewOutcome.requiresAdminApproval) {
+    if (!latestReviewOutcome.requiresAdminApproval) {
       continue;
     }
-
-    const adminRecentlyResponded = await hasRecentAdminResponse(octokit, {
-      owner: params.owner,
-      repo: params.repo,
-      pullNumber: pullRequest.number
-    });
 
     const approvedByEligibleReviewer = await hasCurrentHeadApprovalFrom(octokit, {
       owner: params.owner,
       repo: params.repo,
       pullNumber: pullRequest.number,
       headSha: pullRequest.head.sha,
-      requireAdmin: latestReviewOutcome.requiresAdminApproval || adminRecentlyResponded
+      requireAdmin: true
     });
 
     if (!approvedByEligibleReviewer) {
@@ -324,33 +390,6 @@ export async function processPullRequestReviewApproval(
     return;
   }
 
-  const hasSuccessfulLenientReview = await hasSuccessfulLenientReviewForHead(octokit, {
-    owner: params.owner,
-    repo: params.repo,
-    pullNumber: params.pullNumber,
-    headSha: params.commitId
-  });
-
-  if (latestReviewOutcome.mode === "lenient" && !hasSuccessfulLenientReview) {
-    logger.info(
-      {
-        owner: params.owner,
-        repo: params.repo,
-        pullNumber: params.pullNumber,
-        reviewerLogin: params.reviewerLogin,
-        commitId: params.commitId
-      },
-      "Ignoring lenient approval because there is no successful lenient review for the current head."
-    );
-    return;
-  }
-
-  const adminRecentlyResponded = await hasRecentAdminResponse(octokit, {
-    owner: params.owner,
-    repo: params.repo,
-    pullNumber: params.pullNumber
-  });
-
   const { data: permission } = await octokit.rest.repos.getCollaboratorPermissionLevel({
     owner: params.owner,
     repo: params.repo,
@@ -363,7 +402,7 @@ export async function processPullRequestReviewApproval(
     throw error;
   });
 
-  const requireAdmin = latestReviewOutcome.requiresAdminApproval || adminRecentlyResponded;
+  const requireAdmin = latestReviewOutcome.requiresAdminApproval;
   const allowedPermissions = requireAdmin
     ? new Set(["admin"])
     : new Set(["admin", "maintain", "write"]);
@@ -376,10 +415,9 @@ export async function processPullRequestReviewApproval(
         pullNumber: params.pullNumber,
         reviewerLogin: params.reviewerLogin,
         permission: permission.permission,
-        adminRecentlyResponded,
         requireAdmin
       },
-      "Ignoring lenient approval because reviewer does not meet the current permission threshold."
+      "Ignoring approval because reviewer does not meet the current permission threshold."
     );
     return;
   }
@@ -405,7 +443,7 @@ export async function processPullRequestReviewApproval(
   });
 }
 
-export async function processLenientCheckComment(
+export async function processRecheckComment(
   octokit: Octokit,
   params: {
     owner: string;
@@ -413,9 +451,10 @@ export async function processLenientCheckComment(
     pullNumber: number;
     commenterLogin: string;
     commentBody: string;
+    gitToken?: string;
   }
 ): Promise<void> {
-  if (!isLenientCheckComment(params.commentBody)) {
+  if (!isRecheckComment(params.commentBody)) {
     return;
   }
 
@@ -428,16 +467,10 @@ export async function processLenientCheckComment(
   if (!isReviewBranchEnabled(pullRequest.base.ref)) {
     logger.info(
       { owner: params.owner, repo: params.repo, pullNumber: params.pullNumber, baseBranch: pullRequest.base.ref },
-      "Ignoring lenient check outside REVIEW_BRANCHES."
+      "Ignoring recheck outside REVIEW_BRANCHES."
     );
     return;
   }
-
-  const adminRecentlyResponded = await hasRecentAdminResponse(octokit, {
-    owner: params.owner,
-    repo: params.repo,
-    pullNumber: params.pullNumber
-  });
 
   const { data: permission } = await octokit.rest.repos.getCollaboratorPermissionLevel({
     owner: params.owner,
@@ -451,9 +484,7 @@ export async function processLenientCheckComment(
     throw error;
   });
 
-  const allowedPermissions = adminRecentlyResponded
-    ? new Set(["admin"])
-    : new Set(["admin", "maintain", "write"]);
+  const allowedPermissions = new Set(["admin", "maintain", "write"]);
 
   if (!permission.permission || !allowedPermissions.has(permission.permission)) {
     logger.info(
@@ -463,9 +494,8 @@ export async function processLenientCheckComment(
         pullNumber: params.pullNumber,
         commenterLogin: params.commenterLogin,
         permission: permission.permission,
-        adminRecentlyResponded
       },
-      "Ignoring lenient check comment because commenter does not meet the current permission threshold."
+      "Ignoring recheck comment because commenter does not have write permission."
     );
     return;
   }
@@ -476,18 +506,17 @@ export async function processLenientCheckComment(
       repo: params.repo,
       pullNumber: params.pullNumber,
       commenterLogin: params.commenterLogin,
-      adminRecentlyResponded,
       permission: permission.permission
     },
-    "Processing lenient check comment command."
+    "Processing recheck comment command."
   );
 
-  await withRetry("github.issues.createComment.lenientRequested", async () => {
+  await withRetry("github.issues.createComment.recheckRequested", async () => {
     return octokit.rest.issues.createComment({
       owner: params.owner,
       repo: params.repo,
       issue_number: params.pullNumber,
-      body: `Lenient check requested by @${params.commenterLogin}. Re-running the review with runtime and security focus only.`
+      body: `Recheck requested by @${params.commenterLogin}. Re-running the review with the repository's current strictness settings.`
     });
   });
 
@@ -498,7 +527,8 @@ export async function processLenientCheckComment(
       repo: params.repo,
       pullNumber: params.pullNumber
     },
-    "lenient"
+    config.reviewStrictness === "strict" ? "strict" : "normal",
+    params.gitToken
   );
 }
 
@@ -513,6 +543,7 @@ async function maybeMergePullRequest(
     mode: ReviewMode;
     requireAdminApproval: boolean;
     emitStatusComments: boolean;
+    mergeablePullRequest?: Awaited<ReturnType<typeof waitForMergeable>>;
   }
 ): Promise<void> {
   const { owner, repo, pullNumber } = params;
@@ -522,43 +553,32 @@ async function maybeMergePullRequest(
     return;
   }
 
-  if (params.mode === "lenient" || params.requireAdminApproval) {
-    const adminRecentlyResponded = await hasRecentAdminResponse(octokit, {
-      owner,
-      repo,
-      pullNumber
-    });
-
-    const requireAdmin = params.requireAdminApproval || adminRecentlyResponded;
-    const approvalRequirement = requireAdmin
-      ? "a repository administrator"
-      : "a repository user with write permission or above";
-
+  if (params.requireAdminApproval) {
     const approvedByEligibleReviewer = await hasCurrentHeadApprovalFrom(octokit, {
       owner,
       repo,
       pullNumber,
       headSha: params.headSha,
-      requireAdmin
+      requireAdmin: true
     });
 
     if (!approvedByEligibleReviewer) {
       if (params.emitStatusComments) {
-        await withRetry("github.issues.createComment.awaitLenientApproval", async () => {
+        await withRetry("github.issues.createComment.awaitAdminApproval", async () => {
           return octokit.rest.issues.createComment({
             owner,
             repo,
             issue_number: pullNumber,
-            body: `Automated review passed, but this PR will not be merged until ${approvalRequirement} approves the current head commit.\n\nNext step: in the GitHub pull request UI, click "Review changes" and submit an "Approve" review. No extra command is needed.`
+            body: `Automated review passed, but this PR will not be merged until a repository administrator approves the current head commit.\n\nNext step: in the GitHub pull request UI, click "Review changes" and submit an "Approve" review. No extra command is needed.`
           });
         });
       }
-      logger.info({ owner, repo, pullNumber, requireAdmin }, "Waiting for eligible approval before merging.");
+      logger.info({ owner, repo, pullNumber }, "Waiting for administrator approval before merging.");
       return;
     }
   }
 
-  const mergeablePullRequest = await waitForMergeable(octokit, owner, repo, pullNumber);
+  const mergeablePullRequest = params.mergeablePullRequest ?? await waitForMergeable(octokit, owner, repo, pullNumber);
   if (mergeablePullRequest.mergeable !== true || mergeablePullRequest.mergeable_state === "dirty") {
     if (params.emitStatusComments) {
       await withRetry("github.issues.createComment.notMergeable", async () => {
@@ -670,7 +690,7 @@ async function hasCurrentHeadApprovalFrom(
           pullNumber: params.pullNumber,
           login
         },
-        "Failed to resolve collaborator permission while checking lenient approval eligibility."
+        "Failed to resolve collaborator permission while checking approval eligibility."
       );
     }
   }
@@ -680,19 +700,6 @@ async function hasCurrentHeadApprovalFrom(
 
 function isNotFoundError(error: unknown): boolean {
   return typeof error === "object" && error !== null && "status" in error && error.status === 404;
-}
-
-async function hasSuccessfulLenientReviewForHead(
-  octokit: Octokit,
-  params: {
-    owner: string;
-    repo: string;
-    pullNumber: number;
-    headSha: string;
-  }
-): Promise<boolean> {
-  const outcome = await getLatestBotReviewOutcomeForHead(octokit, params);
-  return outcome?.mode === "lenient" && outcome.outcome === "pass";
 }
 
 async function getLatestBotReviewOutcomeForHead(
@@ -878,9 +885,7 @@ async function upsertReviewCheckRun(
           ? "Malicious code detected"
           : disposition.requiresAdminApproval
             ? "Review notes require administrator approval"
-          : params.mode === "lenient"
-            ? "Lenient review completed"
-            : "Strict review completed",
+          : `${params.mode === "strict" ? "Strict" : "Normal"} review completed`,
         summary: params.decision.result.shouldClosePullRequest
           ? `${params.decision.result.summary}\n\nClose reason: ${params.decision.result.closeReason}`
           : params.decision.result.summary
@@ -926,8 +931,8 @@ async function markReviewCheckApproved(
   });
 }
 
-export function isLenientCheckComment(body: string): boolean {
-  return body.trim().startsWith(LENIENT_COMMENT_COMMAND);
+export function isRecheckComment(body: string): boolean {
+  return body.trim() === RECHECK_COMMENT_COMMAND;
 }
 
 async function closeMaliciousPullRequest(
@@ -1048,79 +1053,4 @@ function shouldFallbackToCommentReview(error: unknown, event: "APPROVE" | "COMME
   }
 
   return error.message.includes("GitHub Actions is not permitted to approve pull requests.");
-}
-
-async function hasRecentAdminResponse(
-  octokit: Octokit,
-  params: {
-    owner: string;
-    repo: string;
-    pullNumber: number;
-  }
-): Promise<boolean> {
-  const threshold = Date.now() - ADMIN_RESPONSE_WINDOW_MS;
-
-  const [comments, reviews] = await Promise.all([
-    octokit.paginate(octokit.rest.issues.listComments, {
-      owner: params.owner,
-      repo: params.repo,
-      issue_number: params.pullNumber,
-      per_page: 100
-    }),
-    octokit.paginate(octokit.rest.pulls.listReviews, {
-      owner: params.owner,
-      repo: params.repo,
-      pull_number: params.pullNumber,
-      per_page: 100
-    })
-  ]);
-
-  const actors = new Map<string, number>();
-
-  for (const comment of comments) {
-    const login = comment.user?.login;
-    const createdAt = comment.created_at ? Date.parse(comment.created_at) : NaN;
-    if (!login || Number.isNaN(createdAt) || createdAt < threshold) {
-      continue;
-    }
-
-    actors.set(login, Math.max(actors.get(login) ?? 0, createdAt));
-  }
-
-  for (const review of reviews) {
-    const login = review.user?.login;
-    const submittedAt = review.submitted_at ? Date.parse(review.submitted_at) : NaN;
-    if (!login || Number.isNaN(submittedAt) || submittedAt < threshold) {
-      continue;
-    }
-
-    actors.set(login, Math.max(actors.get(login) ?? 0, submittedAt));
-  }
-
-  for (const login of actors.keys()) {
-    try {
-      const { data: permission } = await octokit.rest.repos.getCollaboratorPermissionLevel({
-        owner: params.owner,
-        repo: params.repo,
-        username: login
-      });
-
-      if (permission.permission === "admin") {
-        return true;
-      }
-    } catch (error) {
-      logger.warn(
-        {
-          error,
-          owner: params.owner,
-          repo: params.repo,
-          pullNumber: params.pullNumber,
-          login
-        },
-        "Failed to resolve collaborator permission while checking for recent admin response."
-      );
-    }
-  }
-
-  return false;
 }
