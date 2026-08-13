@@ -7,7 +7,6 @@ import { withRetry } from "../retry.js";
 import type { PullRequestFile, PullRequestRef, ReviewDecision, ReviewMode } from "../types.js";
 import {
   deleteLocalReviewCache,
-  deleteRemoteReviewCaches,
   loadPreviousReview,
   saveReviewCache
 } from "./cache.js";
@@ -304,20 +303,6 @@ export async function processScheduledPendingMerges(
       emitStatusComments: false
     });
   }
-}
-
-export async function cleanupPullRequestReviewCache(
-  octokit: Octokit,
-  params: {
-    owner: string;
-    repo: string;
-    repositoryId: string;
-    pullNumber: number;
-  }
-): Promise<void> {
-  await deleteLocalReviewCache(params.pullNumber);
-  const deleted = await deleteRemoteReviewCaches(octokit, params);
-  logger.info({ ...params, deleted }, "Deleted review caches for closed pull request.");
 }
 
 export async function shouldReviewPullRequest(

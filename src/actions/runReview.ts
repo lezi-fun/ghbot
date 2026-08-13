@@ -7,7 +7,6 @@ import { processPullRequestChat } from "../chat/processor.js";
 import { processIssueTriage, processPullRequestTriage } from "../triage/processor.js";
 import { deleteLocalReviewCache } from "../review/cache.js";
 import {
-  cleanupPullRequestReviewCache,
   processRecheckComment,
   processPullRequest,
   processScheduledPendingMerges,
@@ -103,17 +102,6 @@ async function main(): Promise<void> {
       repo: prPayload.repository.name,
       pullNumber: prPayload.pull_request.number
     };
-
-    if (prPayload.action === "closed") {
-      await cleanupPullRequestReviewCache(octokit, {
-        ...ref,
-        repositoryId:
-          process.env.GHBOT_REPOSITORY_ID ||
-          process.env.GITHUB_REPOSITORY_ID ||
-          prPayload.repository.full_name.replace("/", "-")
-      });
-      return;
-    }
 
     if (["opened", "edited", "reopened"].includes(prPayload.action)) {
       try {

@@ -1,8 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { Octokit } from "@octokit/rest";
 import { z } from "zod";
-import { config } from "../config.js";
 import { logger } from "../logger.js";
 import type { ReviewDecision } from "../types.js";
 
@@ -104,66 +102,12 @@ export async function deleteLocalReviewCache(pullNumber: number): Promise<void> 
   await fs.rm(cachePath(pullNumber), { force: true });
 }
 
-export async function deleteRemoteReviewCaches(
-  octokit: Octokit,
-  params: { owner: string; repo: string; repositoryId: string; pullNumber: number }
-): Promise<number> {
-  const keyPrefix = reviewCacheKeyPrefix(params.repositoryId, params.pullNumber);
-
-  try {
-    return await deleteRemoteReviewCachesWithClient(octokit, params.owner, params.repo, keyPrefix);
-  } catch (error) {
-    if (!config.githubToken) {
-      throw error;
-    }
-
-    logger.warn(
-      { error, owner: params.owner, repo: params.repo, pullNumber: params.pullNumber },
-      "GitHub App could not delete Actions caches; retrying with GITHUB_TOKEN."
-    );
-    return deleteRemoteReviewCachesWithClient(
-      new Octokit({ auth: config.githubToken }),
-      params.owner,
-      params.repo,
-      keyPrefix
-    );
-  }
-}
-
 export function reviewCacheKeyPrefix(repositoryId: string, pullNumber: number): string {
   return `ghbot-review-${repositoryId}-pr-${pullNumber}-`;
 }
 
 function cachePath(pullNumber: number): string {
   return path.join(process.cwd(), ".ghbot-cache", `pr-${pullNumber}.json`);
-}
-
-async function deleteRemoteReviewCachesWithClient(
-  octokit: Octokit,
-  owner: string,
-  repo: string,
-  keyPrefix: string
-): Promise<number> {
-  const caches = await octokit.paginate(octokit.rest.actions.getActionsCacheList, {
-    owner,
-    repo,
-    key: keyPrefix,
-    per_page: 100
-  });
-
-  for (const cache of caches) {
-    if (cache.id === undefined) {
-      continue;
-    }
-
-    await octokit.rest.actions.deleteActionsCacheById({
-      owner,
-      repo,
-      cache_id: cache.id
-    });
-  }
-
-  return caches.length;
 }
 
 function isFileNotFound(error: unknown): boolean {

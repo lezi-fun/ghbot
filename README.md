@@ -44,7 +44,7 @@ Each successful review stores this metadata in GitHub Actions cache:
 
 When a new commit triggers `synchronize`, or PR metadata/base changes trigger `edited`, the latest cache for that PR is restored. goose receives an earlier-head result plus the current complete PR patch, revalidates old findings, removes fixed findings, and checks the newest content. The previous merge decision is never reused without a fresh review. An `edited` event on the same head still runs a fresh complete review so title, description, and base-branch changes are respected.
 
-Cache keys are isolated by repository ID and PR number. A `closed` event, including a merged PR, deletes all remote caches for that PR and removes the local cache file. Cache data contains no API keys, full diff, or prompt.
+Cache keys are isolated by repository ID and PR number. Closing or merging a PR does not proactively delete its Actions cache; GitHub's normal cache retention policy removes old entries. Cache data contains no API keys, full diff, or prompt.
 
 ### Self-improving repository knowledge cache
 
@@ -126,7 +126,7 @@ The workflow always receives `github.token`, so no `GITHUB_TOKEN` repository sec
 
 Workflow permissions:
 
-- `actions: write`: save/restore Actions cache and delete PR caches on close or merge.
+- `actions: write`: save and restore Actions cache.
 - `contents: write`: optional merge and repository operations.
 - `pull-requests: write`: list PRs, create reviews, and merge.
 - `issues: write`: list issues/PRs, add labels, create labels, and post comments.

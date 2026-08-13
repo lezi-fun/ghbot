@@ -46,7 +46,7 @@ goose 的审核结果固定包含四个顶层字段：
 
 新 commit 触发 `synchronize` 后，workflow 会恢复该 PR 最新的缓存。goose 同时收到旧审核结果和当前完整 PR diff，重新验证所有旧问题、移除已经修复的问题，并检查新 commit 引入的回归。旧的合并结论不会在没有新审核的情况下直接复用。
 
-PR 标题、描述或 base branch 变化触发 `edited` 时也会重新审核。PR 被关闭或合并后，机器人会删除本地缓存文件，并通过 Actions Cache API 删除该 PR 的远端缓存。缓存不保存 API key、完整 diff 或 prompt。
+PR 标题、描述或 base branch 变化触发 `edited` 时也会重新审核。关闭或合并 PR 不会主动删除 Actions cache；旧条目由 GitHub 的常规缓存保留策略自然清理。缓存不保存 API key、完整 diff 或 prompt。
 
 ## 可自我改进的仓库认知缓存
 
@@ -134,7 +134,7 @@ workflow 自动获得 `github.token`，无需额外创建名为 `GITHUB_TOKEN` �
 
 workflow 声明以下权限：
 
-- `actions: write`：保存、恢复和删除 Actions cache。
+- `actions: write`：保存和恢复 Actions cache。
 - `contents: write`：可选自动合并和仓库操作。
 - `pull-requests: write`：列出 PR、提交 review 和合并。
 - `issues: write`：列出 Issue/PR、管理标签和发布评论。
@@ -160,7 +160,7 @@ GitHub App 建议配置以下 Repository permissions：
 
 GitHub Actions Secret 和 Variable 名称不能以 `GITHUB_` 开头，所以使用上述 `GH_APP_*` 名称。
 
-GitHub App 和 workflow token 在拥有对应权限时都可以列出 Issue、PR 和标签。删除 Actions cache 需要 `actions: write`；如果 App 没有该权限，ghbot 会尝试使用 workflow token 回退。
+GitHub App 和 workflow token 在拥有对应权限时都可以列出 Issue、PR 和标签。Actions cache 由 workflow 的 `github.token` 和 `actions/cache` 管理，不会在 PR 关闭时由 App 主动删除。
 
 ## 在其他仓库中复用
 
