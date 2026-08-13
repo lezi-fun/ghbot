@@ -4,12 +4,26 @@ import { requiredChecksAreGreen } from "../github/checks.js";
 import { collectValidNewLines, toDiffPosition } from "../github/diff.js";
 import { logger } from "../logger.js";
 import { withRetry } from "../retry.js";
-import type { PullRequestFile, PullRequestRef, ReviewDecision, ReviewFinding, ReviewMode } from "../types.js";
-import { CodexCliReviewer } from "./codexCliReviewer.js";
-import { formatReviewBody } from "./format.js";
+import type { PullRequestFile, PullRequestRef, ReviewDecision, ReviewMode } from "../types.js";
+import {
+  deleteLocalReviewCache,
+  deleteRemoteReviewCaches,
+  loadPreviousReview,
+  saveReviewCache
+} from "./cache.js";
+import { OpenCodeCliReviewer } from "./openCodeCliReviewer.js";
+import { formatReviewBody, type CategorizedFinding } from "./format.js";
+import {
+  approvedLoginsForHead,
+  evaluateReviewDecision,
+  formatReviewExternalId,
+  isReviewBranchEnabled,
+  parseReviewExternalId,
+  parseReviewStateMarker
+} from "./policy.js";
 import { compactFilesForReview } from "./prompt.js";
 
-const reviewer = new CodexCliReviewer();
+const reviewer = new OpenCodeCliReviewer();
 const CHECK_RUN_NAME = "ghbot review";
 export const LENIENT_COMMENT_COMMAND = "/lenient-check";
 const ADMIN_RESPONSE_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -33,14 +47,52 @@ export async function processPullRequest(octokit: Octokit, ref: PullRequestRef, 
     return;
   }
 
+  if (!isReviewBranchEnabled(pullRequest.base.ref)) {
+    logger.info(
+      { owner, repo, pullNumber, baseBranch: pullRequest.base.ref, reviewBranches: config.reviewBranches },
+      "Skipping pull request because its base branch does not match REVIEW_BRANCHES."
+    );
+    return;
+  }
+
   const files = await listPullRequestFiles(octokit, owner, repo, pullNumber);
   const compactFiles = compactFilesForReview(files, config.maxPatchChars);
+  const previousReview = await loadPreviousReview({
+    owner,
+    repo,
+    pullNumber,
+    currentHeadSha: pullRequest.head.sha
+  });
   const decision = await reviewer.review({
     title: pullRequest.title,
     body: pullRequest.body,
     files: compactFiles,
-    mode
+    mode,
+    previousReview
   });
+
+  const { data: currentPullRequest } = await octokit.rest.pulls.get({
+    owner,
+    repo,
+    pull_number: pullNumber
+  });
+  if (currentPullRequest.state !== "open" || currentPullRequest.head.sha !== pullRequest.head.sha) {
+    await deleteLocalReviewCache(pullNumber);
+    logger.info(
+      {
+        owner,
+        repo,
+        pullNumber,
+        reviewedHead: pullRequest.head.sha,
+        currentHead: currentPullRequest.head.sha,
+        currentState: currentPullRequest.state
+      },
+      "Discarding stale review because the pull request changed while OpenCode was running."
+    );
+    return;
+  }
+
+  await saveReviewCache({ owner, repo, pullNumber, headSha: pullRequest.head.sha, decision });
 
   await submitReview(octokit, {
     owner,
@@ -61,18 +113,38 @@ export async function processPullRequest(octokit: Octokit, ref: PullRequestRef, 
     mode
   });
 
-  if (decision.shouldClosePullRequest) {
+  if (decision.result.shouldClosePullRequest) {
     await closeMaliciousPullRequest(octokit, {
       owner,
       repo,
       pullNumber,
-      reason: decision.closeReason || "The automated review found clearly malicious code."
+      reason: decision.result.closeReason || "The automated review found clearly malicious code."
     });
     logger.warn({ owner, repo, pullNumber }, "Closed pull request because malicious code was detected.");
     return;
   }
 
-  if (!decision.safeToMerge) {
+  const disposition = evaluateReviewDecision(decision);
+  if (disposition.requiresAdminApproval) {
+    const alreadyApprovedByAdmin = await hasCurrentHeadApprovalFrom(octokit, {
+      owner,
+      repo,
+      pullNumber,
+      headSha: pullRequest.head.sha,
+      requireAdmin: true
+    });
+
+    if (alreadyApprovedByAdmin) {
+      await markReviewCheckApproved(octokit, {
+        owner,
+        repo,
+        headSha: pullRequest.head.sha,
+        pullNumber
+      });
+    }
+  }
+
+  if (disposition.blocksMerge) {
     logger.info({ owner, repo, pullNumber }, "Review requested changes; not merging.");
     return;
   }
@@ -84,6 +156,7 @@ export async function processPullRequest(octokit: Octokit, ref: PullRequestRef, 
     title: pullRequest.title,
     headSha: pullRequest.head.sha,
     mode,
+    requireAdminApproval: disposition.requiresAdminApproval,
     emitStatusComments: true
   });
 }
@@ -108,18 +181,22 @@ export async function processScheduledLenientMerges(
   });
 
   for (const pullRequest of pullRequests) {
-    if (pullRequest.draft) {
+    if (pullRequest.draft || !isReviewBranchEnabled(pullRequest.base.ref)) {
       continue;
     }
 
-    const hasSuccessfulLenientReview = await hasSuccessfulLenientReviewForHead(octokit, {
+    const latestReviewOutcome = await getLatestBotReviewOutcomeForHead(octokit, {
       owner: params.owner,
       repo: params.repo,
       pullNumber: pullRequest.number,
       headSha: pullRequest.head.sha
     });
 
-    if (!hasSuccessfulLenientReview) {
+    if (!latestReviewOutcome || latestReviewOutcome.outcome !== "pass") {
+      continue;
+    }
+
+    if (latestReviewOutcome.mode !== "lenient" && !latestReviewOutcome.requiresAdminApproval) {
       continue;
     }
 
@@ -134,11 +211,20 @@ export async function processScheduledLenientMerges(
       repo: params.repo,
       pullNumber: pullRequest.number,
       headSha: pullRequest.head.sha,
-      requireAdmin: adminRecentlyResponded
+      requireAdmin: latestReviewOutcome.requiresAdminApproval || adminRecentlyResponded
     });
 
     if (!approvedByEligibleReviewer) {
       continue;
+    }
+
+    if (latestReviewOutcome.requiresAdminApproval) {
+      await markReviewCheckApproved(octokit, {
+        owner: params.owner,
+        repo: params.repo,
+        headSha: pullRequest.head.sha,
+        pullNumber: pullRequest.number
+      });
     }
 
     await maybeMergePullRequest(octokit, {
@@ -147,10 +233,37 @@ export async function processScheduledLenientMerges(
       pullNumber: pullRequest.number,
       title: pullRequest.title,
       headSha: pullRequest.head.sha,
-      mode: "lenient",
+      mode: latestReviewOutcome.mode,
+      requireAdminApproval: latestReviewOutcome.requiresAdminApproval,
       emitStatusComments: false
     });
   }
+}
+
+export async function cleanupPullRequestReviewCache(
+  octokit: Octokit,
+  params: {
+    owner: string;
+    repo: string;
+    repositoryId: string;
+    pullNumber: number;
+  }
+): Promise<void> {
+  await deleteLocalReviewCache(params.pullNumber);
+  const deleted = await deleteRemoteReviewCaches(octokit, params);
+  logger.info({ ...params, deleted }, "Deleted review caches for closed pull request.");
+}
+
+export async function shouldReviewPullRequest(
+  octokit: Octokit,
+  params: { owner: string; repo: string; pullNumber: number }
+): Promise<boolean> {
+  const { data: pullRequest } = await octokit.rest.pulls.get({
+    owner: params.owner,
+    repo: params.repo,
+    pull_number: params.pullNumber
+  });
+  return isReviewBranchEnabled(pullRequest.base.ref);
 }
 
 export async function processPullRequestReviewApproval(
@@ -188,6 +301,29 @@ export async function processPullRequestReviewApproval(
     return;
   }
 
+  if (!isReviewBranchEnabled(pullRequest.base.ref)) {
+    logger.info(
+      { owner: params.owner, repo: params.repo, pullNumber: params.pullNumber, baseBranch: pullRequest.base.ref },
+      "Ignoring approval for a pull request outside REVIEW_BRANCHES."
+    );
+    return;
+  }
+
+  const latestReviewOutcome = await getLatestBotReviewOutcomeForHead(octokit, {
+    owner: params.owner,
+    repo: params.repo,
+    pullNumber: params.pullNumber,
+    headSha: params.commitId
+  });
+
+  if (!latestReviewOutcome || latestReviewOutcome.outcome !== "pass") {
+    logger.info(
+      { owner: params.owner, repo: params.repo, pullNumber: params.pullNumber, commitId: params.commitId },
+      "Ignoring approval because there is no successful bot review for the current head."
+    );
+    return;
+  }
+
   const hasSuccessfulLenientReview = await hasSuccessfulLenientReviewForHead(octokit, {
     owner: params.owner,
     repo: params.repo,
@@ -195,7 +331,7 @@ export async function processPullRequestReviewApproval(
     headSha: params.commitId
   });
 
-  if (!hasSuccessfulLenientReview) {
+  if (latestReviewOutcome.mode === "lenient" && !hasSuccessfulLenientReview) {
     logger.info(
       {
         owner: params.owner,
@@ -227,7 +363,8 @@ export async function processPullRequestReviewApproval(
     throw error;
   });
 
-  const allowedPermissions = adminRecentlyResponded
+  const requireAdmin = latestReviewOutcome.requiresAdminApproval || adminRecentlyResponded;
+  const allowedPermissions = requireAdmin
     ? new Set(["admin"])
     : new Set(["admin", "maintain", "write"]);
 
@@ -239,11 +376,21 @@ export async function processPullRequestReviewApproval(
         pullNumber: params.pullNumber,
         reviewerLogin: params.reviewerLogin,
         permission: permission.permission,
-        adminRecentlyResponded
+        adminRecentlyResponded,
+        requireAdmin
       },
       "Ignoring lenient approval because reviewer does not meet the current permission threshold."
     );
     return;
+  }
+
+  if (latestReviewOutcome.requiresAdminApproval) {
+    await markReviewCheckApproved(octokit, {
+      owner: params.owner,
+      repo: params.repo,
+      headSha: pullRequest.head.sha,
+      pullNumber: params.pullNumber
+    });
   }
 
   await maybeMergePullRequest(octokit, {
@@ -252,7 +399,8 @@ export async function processPullRequestReviewApproval(
     pullNumber: params.pullNumber,
     title: pullRequest.title,
     headSha: pullRequest.head.sha,
-    mode: "lenient",
+    mode: latestReviewOutcome.mode,
+    requireAdminApproval: latestReviewOutcome.requiresAdminApproval,
     emitStatusComments: true
   });
 }
@@ -268,6 +416,20 @@ export async function processLenientCheckComment(
   }
 ): Promise<void> {
   if (!isLenientCheckComment(params.commentBody)) {
+    return;
+  }
+
+
+  const { data: pullRequest } = await octokit.rest.pulls.get({
+    owner: params.owner,
+    repo: params.repo,
+    pull_number: params.pullNumber
+  });
+  if (!isReviewBranchEnabled(pullRequest.base.ref)) {
+    logger.info(
+      { owner: params.owner, repo: params.repo, pullNumber: params.pullNumber, baseBranch: pullRequest.base.ref },
+      "Ignoring lenient check outside REVIEW_BRANCHES."
+    );
     return;
   }
 
@@ -349,6 +511,7 @@ async function maybeMergePullRequest(
     title: string;
     headSha: string;
     mode: ReviewMode;
+    requireAdminApproval: boolean;
     emitStatusComments: boolean;
   }
 ): Promise<void> {
@@ -359,14 +522,15 @@ async function maybeMergePullRequest(
     return;
   }
 
-  if (params.mode === "lenient") {
+  if (params.mode === "lenient" || params.requireAdminApproval) {
     const adminRecentlyResponded = await hasRecentAdminResponse(octokit, {
       owner,
       repo,
       pullNumber
     });
 
-    const approvalRequirement = adminRecentlyResponded
+    const requireAdmin = params.requireAdminApproval || adminRecentlyResponded;
+    const approvalRequirement = requireAdmin
       ? "a repository administrator"
       : "a repository user with write permission or above";
 
@@ -375,7 +539,7 @@ async function maybeMergePullRequest(
       repo,
       pullNumber,
       headSha: params.headSha,
-      requireAdmin: adminRecentlyResponded
+      requireAdmin
     });
 
     if (!approvedByEligibleReviewer) {
@@ -385,11 +549,11 @@ async function maybeMergePullRequest(
             owner,
             repo,
             issue_number: pullNumber,
-            body: `Lenient check passed, but this PR will not be merged until ${approvalRequirement} approves the current head commit.\n\nNext step: in the GitHub pull request UI, click "Review changes" and submit an "Approve" review. No extra command is needed.`
+            body: `Automated review passed, but this PR will not be merged until ${approvalRequirement} approves the current head commit.\n\nNext step: in the GitHub pull request UI, click "Review changes" and submit an "Approve" review. No extra command is needed.`
           });
         });
       }
-      logger.info({ owner, repo, pullNumber, adminRecentlyResponded }, "Waiting for eligible lenient approval before merging.");
+      logger.info({ owner, repo, pullNumber, requireAdmin }, "Waiting for eligible approval before merging.");
       return;
     }
   }
@@ -458,10 +622,16 @@ async function hasCurrentHeadApprovalFrom(
     per_page: 100
   });
 
-  const approvedLogins = reviews
-    .filter((review) => review.state === "APPROVED" && review.commit_id === params.headSha)
-    .map((review) => review.user?.login)
-    .filter((login): login is string => Boolean(login));
+  const approvedLogins = approvedLoginsForHead(
+    reviews.map((review) => ({
+      id: review.id,
+      state: review.state,
+      commitId: review.commit_id,
+      login: review.user?.login,
+      submittedAt: review.submitted_at
+    })),
+    params.headSha
+  );
 
   for (const login of approvedLogins) {
     try {
@@ -521,36 +691,43 @@ async function hasSuccessfulLenientReviewForHead(
     headSha: string;
   }
 ): Promise<boolean> {
-  const reviews = await octokit.paginate(octokit.rest.pulls.listReviews, {
+  const outcome = await getLatestBotReviewOutcomeForHead(octokit, params);
+  return outcome?.mode === "lenient" && outcome.outcome === "pass";
+}
+
+async function getLatestBotReviewOutcomeForHead(
+  octokit: Octokit,
+  params: {
+    owner: string;
+    repo: string;
+    pullNumber: number;
+    headSha: string;
+  }
+) {
+  const checks = await octokit.rest.checks.listForRef({
     owner: params.owner,
     repo: params.repo,
-    pull_number: params.pullNumber,
+    ref: params.headSha,
+    check_name: CHECK_RUN_NAME,
     per_page: 100
   });
 
-  const botReviews = reviews
-    .filter((review) => {
-      return (
-        review.user?.login === config.botName &&
-        review.commit_id === params.headSha &&
-        review.state !== "DISMISSED"
-      );
-    })
+  const botChecks = checks.data.check_runs
+    .filter((check) => check.name === CHECK_RUN_NAME)
     .sort((left, right) => {
-      const leftTime = left.submitted_at ? Date.parse(left.submitted_at) : 0;
-      const rightTime = right.submitted_at ? Date.parse(right.submitted_at) : 0;
+      const leftTime = left.started_at ? Date.parse(left.started_at) : 0;
+      const rightTime = right.started_at ? Date.parse(right.started_at) : 0;
       return rightTime - leftTime;
     });
 
-  for (const review of botReviews) {
-    if (!review.body?.includes("Mode: lenient")) {
-      continue;
+  for (const check of botChecks) {
+    const outcome = parseReviewExternalId(check.external_id);
+    if (outcome) {
+      return outcome;
     }
-
-    return review.state === "APPROVED";
   }
 
-  return false;
+  return null;
 }
 
 async function listPullRequestFiles(
@@ -596,9 +773,13 @@ async function submitReview(
 
   const validLines = collectValidNewLines(params.files);
   const filesByPath = new Map(params.files.map((file) => [file.filename, file]));
-  const unpostedFindings: ReviewFinding[] = [];
+  const unpostedFindings: CategorizedFinding[] = [];
+  const categorizedFindings: CategorizedFinding[] = [
+    ...params.decision.change.map((finding) => ({ ...finding, category: "change" as const })),
+    ...params.decision.review.map((finding) => ({ ...finding, category: "review" as const }))
+  ];
 
-  const comments = params.decision.findings.flatMap((finding) => {
+  const comments = categorizedFindings.flatMap((finding) => {
     const file = filesByPath.get(finding.path);
     if (!file) {
       unpostedFindings.push(finding);
@@ -616,15 +797,14 @@ async function submitReview(
         path: position.path,
         line: position.line,
         side: position.side,
-        body: `**${finding.title}**\n\n${finding.body}`
+        body: `**${finding.category === "change" ? "Required change" : "Review note"}: ${finding.title}**\n\n${finding.body}`
       }
     ];
   });
 
-  const hasBlockingFinding = params.decision.findings.some((finding) => finding.severity === "blocking");
-  const event: "APPROVE" | "REQUEST_CHANGES" =
-    params.decision.safeToMerge && !hasBlockingFinding ? "APPROVE" : "REQUEST_CHANGES";
-  const body = formatReviewBody(params.decision, unpostedFindings, params.mode);
+  const disposition = evaluateReviewDecision(params.decision);
+  const event = disposition.event;
+  const body = formatReviewBody(params.decision, unpostedFindings, params.mode, disposition);
 
   try {
     await withRetry("github.pulls.createReview", async () => {
@@ -679,9 +859,10 @@ async function upsertReviewCheckRun(
     mode: ReviewMode;
   }
 ): Promise<void> {
-  const hasBlockingFinding = params.decision.findings.some((finding) => finding.severity === "blocking");
-  const conclusion =
-    params.decision.shouldClosePullRequest || hasBlockingFinding || !params.decision.safeToMerge ? "action_required" : "success";
+  const disposition = evaluateReviewDecision(params.decision);
+  const conclusion = disposition.blocksMerge || disposition.requiresAdminApproval
+    ? "action_required"
+    : "success";
 
   await withRetry("github.checks.create", async () => {
     return octokit.rest.checks.create({
@@ -691,15 +872,54 @@ async function upsertReviewCheckRun(
       head_sha: params.headSha,
       status: "completed",
       conclusion,
+      external_id: formatReviewExternalId(params.mode, disposition),
       output: {
-        title: params.decision.shouldClosePullRequest
+        title: params.decision.result.shouldClosePullRequest
           ? "Malicious code detected"
+          : disposition.requiresAdminApproval
+            ? "Review notes require administrator approval"
           : params.mode === "lenient"
             ? "Lenient review completed"
             : "Strict review completed",
-        summary: params.decision.shouldClosePullRequest
-          ? `${params.decision.summary}\n\nClose reason: ${params.decision.closeReason}`
-          : params.decision.summary
+        summary: params.decision.result.shouldClosePullRequest
+          ? `${params.decision.result.summary}\n\nClose reason: ${params.decision.result.closeReason}`
+          : params.decision.result.summary
+      },
+      details_url: `https://github.com/${params.owner}/${params.repo}/pull/${params.pullNumber}`
+    });
+  });
+}
+
+async function markReviewCheckApproved(
+  octokit: Octokit,
+  params: { owner: string; repo: string; headSha: string; pullNumber: number }
+): Promise<void> {
+  const checks = await octokit.rest.checks.listForRef({
+    owner: params.owner,
+    repo: params.repo,
+    ref: params.headSha,
+    check_name: CHECK_RUN_NAME,
+    per_page: 100
+  });
+  const check = checks.data.check_runs
+    .filter((item) => item.name === CHECK_RUN_NAME)
+    .sort((left, right) => Date.parse(right.started_at ?? "") - Date.parse(left.started_at ?? ""))[0];
+
+  if (!check) {
+    throw new Error(`Could not find ${CHECK_RUN_NAME} check for ${params.headSha}.`);
+  }
+
+  await withRetry("github.checks.update.adminApproved", async () => {
+    return octokit.rest.checks.update({
+      owner: params.owner,
+      repo: params.repo,
+      check_run_id: check.id,
+      status: "completed",
+      conclusion: "success",
+      external_id: check.external_id ?? undefined,
+      output: {
+        title: "Repository administrator approved review notes",
+        summary: "The current pull request head has the administrator approval required by REVIEW_POLICY=require_approval."
       },
       details_url: `https://github.com/${params.owner}/${params.repo}/pull/${params.pullNumber}`
     });
@@ -783,11 +1003,7 @@ async function dismissExistingBotReviews(
   });
 
   for (const review of reviews) {
-    if (review.user?.login !== config.botName) {
-      continue;
-    }
-
-    if (review.commit_id !== params.commitId) {
+    if (review.user?.type !== "Bot" || !parseReviewStateMarker(review.body)) {
       continue;
     }
 
@@ -818,7 +1034,7 @@ async function dismissExistingBotReviews(
   }
 }
 
-function shouldFallbackToCommentReview(error: unknown, event: "APPROVE" | "REQUEST_CHANGES"): boolean {
+function shouldFallbackToCommentReview(error: unknown, event: "APPROVE" | "COMMENT" | "REQUEST_CHANGES"): boolean {
   if (event !== "APPROVE") {
     return false;
   }

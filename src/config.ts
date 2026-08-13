@@ -26,6 +26,19 @@ const envBoolean = z.preprocess((value) => {
   }
 }, z.boolean());
 
+function csvListWithDefault(defaultValue: string[]) {
+  return z.preprocess((value) => {
+    if (typeof value !== "string") {
+      return value ?? defaultValue;
+    }
+
+    return value
+      .split(",")
+      .map((part) => part.trim())
+      .filter(Boolean);
+  }, z.array(z.string()));
+}
+
 const configSchema = z.object({
   port: z.coerce.number().int().positive().default(3000),
   githubToken: optionalString,
@@ -38,12 +51,21 @@ const configSchema = z.object({
 
     return value;
   }, z.coerce.number().int().positive().optional()),
-  codexModel: optionalString.default("gpt-5.4"),
-  codexReasoningEffort: z.preprocess((value) => {
+  openCodeModel: optionalString.default("gpt-5.4"),
+  openCodeReasoningEffort: z.preprocess((value) => {
     return value === "" ? undefined : value;
   }, z.enum(["minimal", "low", "medium", "high", "xhigh"]).optional()),
-  codexBaseUrl: optionalString,
-  codexApiKey: z.string().min(1),
+  openCodeBaseUrl: optionalString,
+  openCodeApiKey: optionalString,
+  reviewPolicy: z.enum(["allow", "require_approval", "reject"]).default("require_approval"),
+  reviewInstructions: optionalString,
+  reviewBranches: csvListWithDefault([]),
+  triageEnabled: envBoolean.default(true),
+  triageLabels: csvListWithDefault(["bug", "enhancement", "documentation", "question", "maintenance"])
+    .refine((labels) => labels.length > 0, "TRIAGE_LABELS must contain at least one label."),
+  triageDuplicateLabel: z.string().min(1).default("duplicate"),
+  triageCandidateLimit: z.coerce.number().int().positive().max(100).default(50),
+  triageInstructions: optionalString,
   botName: z.string().min(1).default("ghbot"),
   autoMerge: envBoolean.default(false),
   mergeMethod: z.enum(["merge", "squash", "rebase"]).default("squash"),
@@ -58,10 +80,18 @@ export const config = configSchema.parse({
   githubAppId: process.env.GH_APP_ID ?? process.env.GITHUB_APP_ID,
   githubAppPrivateKey: process.env.GH_APP_PRIVATE_KEY ?? process.env.GITHUB_APP_PRIVATE_KEY,
   githubAppInstallationId: process.env.GH_APP_INSTALLATION_ID ?? process.env.GITHUB_APP_INSTALLATION_ID,
-  codexModel: process.env.CODEX_MODEL,
-  codexReasoningEffort: process.env.CODEX_REASONING_EFFORT,
-  codexBaseUrl: process.env.CODEX_BASE_URL,
-  codexApiKey: process.env.CODEX_API_KEY,
+  openCodeModel: process.env.OPENCODE_MODEL,
+  openCodeReasoningEffort: process.env.OPENCODE_REASONING_EFFORT,
+  openCodeBaseUrl: process.env.OPENCODE_BASE_URL,
+  openCodeApiKey: process.env.OPENCODE_API_KEY,
+  reviewPolicy: process.env.REVIEW_POLICY,
+  reviewInstructions: process.env.REVIEW_INSTRUCTIONS,
+  reviewBranches: process.env.REVIEW_BRANCHES,
+  triageEnabled: process.env.TRIAGE_ENABLED,
+  triageLabels: process.env.TRIAGE_LABELS,
+  triageDuplicateLabel: process.env.TRIAGE_DUPLICATE_LABEL,
+  triageCandidateLimit: process.env.TRIAGE_CANDIDATE_LIMIT,
+  triageInstructions: process.env.TRIAGE_INSTRUCTIONS,
   botName: process.env.BOT_NAME,
   autoMerge: process.env.AUTO_MERGE,
   mergeMethod: process.env.MERGE_METHOD,

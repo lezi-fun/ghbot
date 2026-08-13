@@ -15,18 +15,20 @@ export type PullRequestFile = {
 export type ReviewFinding = {
   path: string;
   line: number;
-  severity: "blocking" | "suggestion";
   title: string;
   body: string;
 };
 
 export type ReviewDecision = {
-  safeToMerge: boolean;
-  shouldClosePullRequest: boolean;
-  closeReason: string;
-  summary: string;
-  fixTips: string[];
-  findings: ReviewFinding[];
+  review: ReviewFinding[];
+  change: ReviewFinding[];
+  comment: string;
+  result: {
+    canMerge: boolean;
+    summary: string;
+    shouldClosePullRequest: boolean;
+    closeReason: string;
+  };
 };
 
 export type ReviewMode = "strict" | "lenient";

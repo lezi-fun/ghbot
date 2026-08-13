@@ -7,6 +7,13 @@ on:
       - synchronize
       - reopened
       - ready_for_review
+      - edited
+      - closed
+  issues:
+    types:
+      - opened
+      - edited
+      - reopened
   issue_comment:
     types:
       - created
@@ -17,6 +24,7 @@ on:
     - cron: "17 * * * *"
 
 permissions:
+  actions: write
   contents: write
   pull-requests: write
   checks: write
@@ -27,11 +35,12 @@ jobs:
   review:
     if: |
       github.event_name == 'pull_request_target' ||
+      github.event_name == 'issues' ||
       (github.event_name == 'issue_comment' && github.event.issue.pull_request != null) ||
       github.event_name == 'pull_request_review'
     uses: ./.github/workflows/review-reusable.yml
     secrets:
-      CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+      OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
       GH_APP_ID: ${{ secrets.GH_APP_ID }}
       GH_APP_PRIVATE_KEY: ${{ secrets.GH_APP_PRIVATE_KEY }}
       GH_APP_INSTALLATION_ID: ${{ secrets.GH_APP_INSTALLATION_ID }}
@@ -40,16 +49,26 @@ jobs:
       event_action: ${{ github.event.action }}
       repository_owner: ${{ github.repository_owner }}
       repository_name: ${{ github.event.repository.name }}
+      repository_id: ${{ github.repository_id }}
       pull_number: ${{ github.event.pull_request.number || github.event.issue.number }}
+      comment_id: ${{ github.event.comment.id || '' }}
       commenter_login: ${{ github.event.comment.user.login || '' }}
       comment_body: ${{ github.event.comment.body || '' }}
       reviewer_login: ${{ github.event.review.user.login || '' }}
       review_state: ${{ github.event.review.state || '' }}
       review_commit_id: ${{ github.event.review.commit_id || '' }}
       bot_name: github-actions[bot]
-      codex_base_url: ${{ vars.CODEX_BASE_URL || 'https://api.openai.com/v1' }}
-      codex_model: ${{ vars.CODEX_MODEL || 'gpt-5.4' }}
-      codex_reasoning_effort: ${{ vars.CODEX_REASONING_EFFORT || 'high' }}
+      opencode_base_url: ${{ vars.OPENCODE_BASE_URL || 'https://api.openai.com/v1' }}
+      opencode_model: ${{ vars.OPENCODE_MODEL || 'gpt-5.4' }}
+      opencode_reasoning_effort: ${{ vars.OPENCODE_REASONING_EFFORT || 'high' }}
+      review_policy: ${{ vars.REVIEW_POLICY || 'require_approval' }}
+      review_instructions: ${{ vars.REVIEW_INSTRUCTIONS || '' }}
+      review_branches: ${{ vars.REVIEW_BRANCHES || '' }}
+      triage_enabled: ${{ vars.TRIAGE_ENABLED || 'true' }}
+      triage_labels: ${{ vars.TRIAGE_LABELS || 'bug,enhancement,documentation,question,maintenance' }}
+      triage_duplicate_label: ${{ vars.TRIAGE_DUPLICATE_LABEL || 'duplicate' }}
+      triage_candidate_limit: ${{ vars.TRIAGE_CANDIDATE_LIMIT || '50' }}
+      triage_instructions: ${{ vars.TRIAGE_INSTRUCTIONS || '' }}
       auto_merge: ${{ vars.AUTO_MERGE || 'false' }}
       merge_method: ${{ vars.MERGE_METHOD || 'squash' }}
       require_checks: ${{ vars.REQUIRE_CHECKS || 'true' }}
@@ -59,7 +78,7 @@ jobs:
     if: github.event_name == 'schedule'
     uses: ./.github/workflows/review-reusable.yml
     secrets:
-      CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+      OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
       GH_APP_ID: ${{ secrets.GH_APP_ID }}
       GH_APP_PRIVATE_KEY: ${{ secrets.GH_APP_PRIVATE_KEY }}
       GH_APP_INSTALLATION_ID: ${{ secrets.GH_APP_INSTALLATION_ID }}
@@ -68,11 +87,20 @@ jobs:
       event_action: schedule
       repository_owner: ${{ github.repository_owner }}
       repository_name: ${{ github.event.repository.name }}
+      repository_id: ${{ github.repository_id }}
       pull_number: "1"
       bot_name: github-actions[bot]
-      codex_base_url: ${{ vars.CODEX_BASE_URL || 'https://api.openai.com/v1' }}
-      codex_model: ${{ vars.CODEX_MODEL || 'gpt-5.4' }}
-      codex_reasoning_effort: ${{ vars.CODEX_REASONING_EFFORT || 'high' }}
+      opencode_base_url: ${{ vars.OPENCODE_BASE_URL || 'https://api.openai.com/v1' }}
+      opencode_model: ${{ vars.OPENCODE_MODEL || 'gpt-5.4' }}
+      opencode_reasoning_effort: ${{ vars.OPENCODE_REASONING_EFFORT || 'high' }}
+      review_policy: ${{ vars.REVIEW_POLICY || 'require_approval' }}
+      review_instructions: ${{ vars.REVIEW_INSTRUCTIONS || '' }}
+      review_branches: ${{ vars.REVIEW_BRANCHES || '' }}
+      triage_enabled: ${{ vars.TRIAGE_ENABLED || 'true' }}
+      triage_labels: ${{ vars.TRIAGE_LABELS || 'bug,enhancement,documentation,question,maintenance' }}
+      triage_duplicate_label: ${{ vars.TRIAGE_DUPLICATE_LABEL || 'duplicate' }}
+      triage_candidate_limit: ${{ vars.TRIAGE_CANDIDATE_LIMIT || '50' }}
+      triage_instructions: ${{ vars.TRIAGE_INSTRUCTIONS || '' }}
       auto_merge: ${{ vars.AUTO_MERGE || 'false' }}
       merge_method: ${{ vars.MERGE_METHOD || 'squash' }}
       require_checks: ${{ vars.REQUIRE_CHECKS || 'true' }}

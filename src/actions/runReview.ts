@@ -3,11 +3,16 @@ import { config } from "../config.js";
 import { createGitHubClient } from "../github/client.js";
 import { logger } from "../logger.js";
 import { withRetry } from "../retry.js";
+import { processPullRequestChat } from "../chat/processor.js";
+import { processIssueTriage, processPullRequestTriage } from "../triage/processor.js";
+import { deleteLocalReviewCache } from "../review/cache.js";
 import {
+  cleanupPullRequestReviewCache,
   processLenientCheckComment,
   processPullRequest,
   processScheduledLenientMerges,
-  processPullRequestReviewApproval
+  processPullRequestReviewApproval,
+  shouldReviewPullRequest
 } from "../review/processor.js";
 
 type GitHubRepository = {
@@ -36,10 +41,19 @@ type IssueCommentPayload = {
     };
   };
   comment: {
+    id: number;
     body: string;
     user: {
       login: string;
     };
+  };
+  repository: GitHubRepository;
+};
+
+type IssuePayload = {
+  action: string;
+  issue: {
+    number: number;
   };
   repository: GitHubRepository;
 };
@@ -83,6 +97,44 @@ async function main(): Promise<void> {
 
   if (eventName === "pull_request_target") {
     const prPayload = payload as PullRequestPayload;
+    const ref = {
+      owner: prPayload.repository.owner.login,
+      repo: prPayload.repository.name,
+      pullNumber: prPayload.pull_request.number
+    };
+
+    if (prPayload.action === "closed") {
+      await cleanupPullRequestReviewCache(octokit, {
+        ...ref,
+        repositoryId:
+          process.env.GHBOT_REPOSITORY_ID ||
+          process.env.GITHUB_REPOSITORY_ID ||
+          prPayload.repository.full_name.replace("/", "-")
+      });
+      return;
+    }
+
+    if (["opened", "edited", "reopened"].includes(prPayload.action)) {
+      try {
+        await processPullRequestTriage(octokit, {
+          owner: ref.owner,
+          repo: ref.repo,
+          pullNumber: ref.pullNumber
+        });
+      } catch (error) {
+        logger.warn(
+          { error, ...ref },
+          "Pull request triage failed; continuing with code review."
+        );
+      }
+    }
+
+    if (!(await shouldReviewPullRequest(octokit, ref))) {
+      await deleteLocalReviewCache(ref.pullNumber);
+      logger.info({ ...ref }, "Skipping pull request event outside REVIEW_BRANCHES.");
+      return;
+    }
+
     if (prPayload.action === "opened") {
       await withRetry("github.issues.createComment.started", async () => {
         return octokit.rest.issues.createComment({
@@ -94,15 +146,19 @@ async function main(): Promise<void> {
       });
     }
 
-    await processPullRequest(
-      octokit,
-      {
-        owner: prPayload.repository.owner.login,
-        repo: prPayload.repository.name,
-        pullNumber: prPayload.pull_request.number
-      },
-      "strict"
-    );
+    await processPullRequest(octokit, ref, "strict");
+    return;
+  }
+
+  if (eventName === "issues") {
+    const issuePayload = payload as IssuePayload;
+    if (["opened", "edited", "reopened"].includes(issuePayload.action)) {
+      await processIssueTriage(octokit, {
+        owner: issuePayload.repository.owner.login,
+        repo: issuePayload.repository.name,
+        issueNumber: issuePayload.issue.number
+      });
+    }
     return;
   }
 
@@ -117,6 +173,14 @@ async function main(): Promise<void> {
       owner: commentPayload.repository.owner.login,
       repo: commentPayload.repository.name,
       pullNumber: commentPayload.issue.number,
+      commenterLogin: commentPayload.comment.user.login,
+      commentBody: commentPayload.comment.body
+    });
+    await processPullRequestChat(octokit, {
+      owner: commentPayload.repository.owner.login,
+      repo: commentPayload.repository.name,
+      pullNumber: commentPayload.issue.number,
+      commentId: commentPayload.comment.id,
       commenterLogin: commentPayload.comment.user.login,
       commentBody: commentPayload.comment.body
     });
@@ -154,16 +218,16 @@ async function main(): Promise<void> {
   logger.warn({ eventName }, "Unhandled GitHub Actions event.");
 }
 
-function readPayloadFromGitHubEventPath(): PullRequestPayload | IssueCommentPayload | PullRequestReviewPayload | ScheduledPayload {
+function readPayloadFromGitHubEventPath(): PullRequestPayload | IssuePayload | IssueCommentPayload | PullRequestReviewPayload | ScheduledPayload {
   const eventPath = process.env.GITHUB_EVENT_PATH;
   if (!eventPath) {
     throw new Error("GITHUB_EVENT_PATH is required when workflow_call inputs are not provided.");
   }
 
-  return JSON.parse(fs.readFileSync(eventPath, "utf8")) as PullRequestPayload | IssueCommentPayload | PullRequestReviewPayload | ScheduledPayload;
+  return JSON.parse(fs.readFileSync(eventPath, "utf8")) as PullRequestPayload | IssuePayload | IssueCommentPayload | PullRequestReviewPayload | ScheduledPayload;
 }
 
-function buildPayloadFromWorkflowCallEnv(eventName: string): PullRequestPayload | IssueCommentPayload | PullRequestReviewPayload | ScheduledPayload {
+function buildPayloadFromWorkflowCallEnv(eventName: string): PullRequestPayload | IssuePayload | IssueCommentPayload | PullRequestReviewPayload | ScheduledPayload {
   const action = process.env.GHBOT_EVENT_ACTION;
   const owner = process.env.GHBOT_REPOSITORY_OWNER;
   const repo = process.env.GHBOT_REPOSITORY_NAME;
@@ -202,10 +266,21 @@ function buildPayloadFromWorkflowCallEnv(eventName: string): PullRequestPayload 
         }
       },
       comment: {
+        id: Number(process.env.GHBOT_COMMENT_ID) || 0,
         body: process.env.GHBOT_COMMENT_BODY ?? "",
         user: {
           login: process.env.GHBOT_COMMENTER_LOGIN ?? ""
         }
+      },
+      repository
+    };
+  }
+
+  if (eventName === "issues") {
+    return {
+      action,
+      issue: {
+        number: pullNumber
       },
       repository
     };

@@ -8,4 +8,4 @@ yarn-error.log*
 pnpm-debug.log*
 .vercel
 .ghbot-tmp/
-.review-result.json
+.ghbot-cache/
