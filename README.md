@@ -2,11 +2,11 @@
 
 [中文文档](README-zh.md)
 
-GitHub Actions bot that uses OpenCode to review pull requests, triage issues and pull requests, flag likely duplicates, and optionally merge approved changes.
+GitHub Actions bot that uses goose to review pull requests, triage issues and pull requests, flag likely duplicates, answer repository-aware PR questions, and optionally merge approved changes.
 
 ## Pull request review
 
-OpenCode returns exactly four sections:
+goose returns exactly four sections:
 
 - `review`: concrete non-blocking inline review notes.
 - `change`: required inline changes that block merge.
@@ -41,7 +41,7 @@ Each successful review stores this metadata in GitHub Actions cache:
 - reviewed head SHA and timestamp
 - the structured `review/change/comment/result` output
 
-When a new commit triggers `synchronize`, or PR metadata/base changes trigger `edited`, the latest cache for that PR is restored. OpenCode receives an earlier-head result plus the current complete PR patch, revalidates old findings, removes fixed findings, and checks the newest content. The previous merge decision is never reused without a fresh review. An `edited` event on the same head still runs a fresh complete review so title, description, and base-branch changes are respected.
+When a new commit triggers `synchronize`, or PR metadata/base changes trigger `edited`, the latest cache for that PR is restored. goose receives an earlier-head result plus the current complete PR patch, revalidates old findings, removes fixed findings, and checks the newest content. The previous merge decision is never reused without a fresh review. An `edited` event on the same head still runs a fresh complete review so title, description, and base-branch changes are respected.
 
 Cache keys are isolated by repository ID and PR number. A `closed` event, including a merged PR, deletes all remote caches for that PR and removes the local cache file. Cache data contains no API keys, full diff, or prompt.
 
@@ -61,7 +61,7 @@ Triage variables:
 - `TRIAGE_ENABLED`: default `true`.
 - `TRIAGE_LABELS`: default `bug,enhancement,documentation,question,maintenance`.
 - `TRIAGE_DUPLICATE_LABEL`: default `duplicate`.
-- `TRIAGE_CANDIDATE_LIMIT`: recent same-type items supplied to OpenCode, default `50`, maximum `100`.
+- `TRIAGE_CANDIDATE_LIMIT`: recent same-type items supplied to goose, default `50`, maximum `100`.
 - `TRIAGE_INSTRUCTIONS`: optional repository-specific classification rules.
 
 Missing configured labels are created automatically.
@@ -72,35 +72,37 @@ Mention `@bot` in a pull request conversation to ask about the current PR. The c
 
 This restriction does not affect automatic review. Pull requests from forks and contributors without repository access still receive the normal `review/change/comment/result` review on every configured PR event. When an external contributor needs repository-agent investigation, a maintainer can mention `@bot` on that contributor's PR; the agent then analyzes the contributor's current PR head in isolation and posts the answer to the same conversation.
 
-ghbot checks out the current PR head without persisted GitHub credentials and gives OpenCode a sanitized temporary snapshot plus the PR title, description, branches, and bounded complete diff. OpenCode runs in a dedicated disposable Docker container with every OpenCode tool allowed. It can execute commands and tests, edit the temporary workspace, install dependencies, and use the network, but the container mounts only the sanitized PR snapshot and receives no GitHub token, GitHub App credentials, or real OpenCode API key. A short-lived local proxy exchanges the container's one-run token for the real provider credential and closes with the container. The agent cannot commit or push, and resource/time limits still apply. The named container is forcibly removed on success, failure, or timeout.
+ghbot checks out the current PR head without persisted GitHub credentials and gives goose a sanitized temporary snapshot plus the PR title, description, branches, and bounded complete diff. goose runs in a dedicated disposable Docker container with the built-in Developer extension enabled in automatic mode. It can execute commands and tests, edit the temporary workspace, install dependencies, and use the network, but the container mounts only the sanitized PR snapshot and receives no GitHub token, GitHub App credentials, or real goose API key. A short-lived local proxy exchanges the container's one-run token for the real provider credential and closes with the container. The agent cannot commit or push, and resource/time limits still apply. The named container is forcibly removed on success, failure, or timeout.
 
-The snapshot excludes Git metadata, repository OpenCode/agent instruction files, `.env`, and symbolic links, then is deleted after the reply. This prevents PR-controlled OpenCode configuration and common credential paths from entering the agent workspace; the container boundary protects the Actions runner and ghbot runtime while preserving full permissions inside the analysis environment.
+The snapshot excludes Git metadata, repository goose/OpenCode/agent instruction files, `.env`, and symbolic links, then is deleted after the reply. This prevents PR-controlled agent configuration and common credential paths from entering the agent workspace; the container boundary protects the Actions runner and ghbot runtime while preserving full permissions inside the analysis environment.
 
 Replies are keyed to the source comment so a workflow rerun does not post the same answer twice, and bot-authored replies are ignored to prevent loops.
 
-## OpenCode configuration
+## goose configuration
 
 Required secret:
 
-- `OPENCODE_API_KEY`
+- `GOOSE_API_KEY`
 
 Repository variables:
 
-- `OPENCODE_BASE_URL`: default `https://api.openai.com/v1`.
-- `OPENCODE_MODEL`: default `gpt-5.4`.
-- `OPENCODE_REASONING_EFFORT`: `minimal`, `low`, `medium`, `high`, or `xhigh`; default `high` in the workflow.
+- `GOOSE_BASE_URL`: OpenAI-compatible base URL; default `https://api.openai.com/v1`.
+- `GOOSE_MODEL`: default `gpt-5.4`.
+- `GOOSE_THINKING_EFFORT`: `off`, `low`, `medium`, `high`, or `max`; default `high` in the workflow.
 
-The workflow installs the tested `opencode-ai@1.18.14`. At runtime ghbot creates an isolated inline OpenCode provider using `@ai-sdk/openai-compatible`, so requests use the OpenAI-compatible `/v1/chat/completions` API. It invokes:
+The workflow installs the pinned goose CLI `v1.46.0`. Review and triage run without extensions in chat mode against the OpenAI-compatible `/v1/chat/completions` API. It invokes:
 
 ```text
-opencode run --pure --format json --model ghbot/<model> --variant <effort>
+goose run --no-session --no-profile --quiet --output-format json --provider openai --model <model> --text <prompt>
 ```
 
-The OpenCode process gets an isolated home/data/state directory, disables plugins, model fetching, LSP downloads, and auto-update, and denies every tool permission. It receives the PR patch as data and returns JSON through the CLI NDJSON event stream; it does not edit or execute the reviewed repository.
+The goose process gets isolated home/config/data/state directories, disables profiles and repository context files, and uses `GOOSE_MODE=chat` for automatic review and triage so no tools can run. Only authorized PR comment chat uses the Developer extension inside the disposable container.
+
+For migration, the runtime and workflows still accept `OPENCODE_API_KEY`, `OPENCODE_BASE_URL`, `OPENCODE_MODEL`, and `OPENCODE_REASONING_EFFORT` as fallback aliases. New repositories should use the `GOOSE_*` names.
 
 ## GitHub authentication and permissions
 
-The workflow always receives `github.token`, so no `GITHUB_TOKEN` repository secret is needed. ghbot optionally prefers a GitHub App installation token and falls back to the workflow token when App authentication fails. The OpenCode key remains a separate secret.
+The workflow always receives `github.token`, so no `GITHUB_TOKEN` repository secret is needed. ghbot optionally prefers a GitHub App installation token and falls back to the workflow token when App authentication fails. The goose provider key remains a separate secret.
 
 Workflow permissions:
 
@@ -141,7 +143,7 @@ The caller must forward `issues`, `pull_request_target`, `issue_comment`, `pull_
 
 ```yaml
 secrets:
-  OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+  GOOSE_API_KEY: ${{ secrets.GOOSE_API_KEY }}
   GH_APP_ID: ${{ secrets.GH_APP_ID }}
   GH_APP_PRIVATE_KEY: ${{ secrets.GH_APP_PRIVATE_KEY }}
   GH_APP_INSTALLATION_ID: ${{ secrets.GH_APP_INSTALLATION_ID }}
@@ -167,7 +169,7 @@ npm run typecheck
 npm run build
 ```
 
-For local event simulation, install OpenCode and export the variables in [.env.example](.env.example), plus `GITHUB_EVENT_NAME` and `GITHUB_EVENT_PATH`, then run:
+For local event simulation, install goose `v1.46.0` and export the variables in [.env.example](.env.example), plus `GITHUB_EVENT_NAME` and `GITHUB_EVENT_PATH`, then run:
 
 ```bash
 node dist/src/actions/runReview.js

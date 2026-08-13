@@ -11,7 +11,7 @@ import {
   loadPreviousReview,
   saveReviewCache
 } from "./cache.js";
-import { OpenCodeCliReviewer } from "./openCodeCliReviewer.js";
+import { GooseReviewer } from "./gooseReviewer.js";
 import { formatReviewBody, type CategorizedFinding } from "./format.js";
 import {
   approvedLoginsForHead,
@@ -23,7 +23,7 @@ import {
 } from "./policy.js";
 import { compactFilesForReview } from "./prompt.js";
 
-const reviewer = new OpenCodeCliReviewer();
+const reviewer = new GooseReviewer();
 const CHECK_RUN_NAME = "ghbot review";
 export const LENIENT_COMMENT_COMMAND = "/lenient-check";
 const ADMIN_RESPONSE_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -87,7 +87,7 @@ export async function processPullRequest(octokit: Octokit, ref: PullRequestRef, 
         currentHead: currentPullRequest.head.sha,
         currentState: currentPullRequest.state
       },
-      "Discarding stale review because the pull request changed while OpenCode was running."
+      "Discarding stale review because the pull request changed while goose was running."
     );
     return;
   }

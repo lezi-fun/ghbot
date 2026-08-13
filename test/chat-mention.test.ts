@@ -35,17 +35,20 @@ test("PR chat snapshot excludes repository instructions, secrets, git data, and 
 
   try {
     await fs.mkdir(path.join(source, ".git"));
+    await fs.mkdir(path.join(source, ".goose"));
     await fs.mkdir(path.join(source, ".opencode"));
     await fs.mkdir(path.join(source, ".agents"));
     await fs.mkdir(path.join(source, "src"));
     await Promise.all([
       fs.writeFile(path.join(source, ".git", "config"), "credential data"),
+      fs.writeFile(path.join(source, ".goose", "config.yaml"), "untrusted goose config"),
       fs.writeFile(path.join(source, ".opencode", "plugin.ts"), "untrusted plugin"),
       fs.writeFile(path.join(source, ".agents", "SKILL.md"), "untrusted skill"),
       fs.writeFile(path.join(source, ".env"), "TOKEN=secret"),
       fs.writeFile(path.join(source, ".env.local"), "TOKEN=local-secret"),
       fs.writeFile(path.join(source, "AGENTS.md"), "untrusted instructions"),
       fs.writeFile(path.join(source, "opencode.json"), "{}"),
+      fs.writeFile(path.join(source, ".goosehints"), "untrusted hints"),
       fs.writeFile(path.join(source, "src", "index.ts"), "export const safe = true;\n"),
       fs.symlink(path.join(source, ".env"), path.join(source, "secret-link"))
     ]);
@@ -54,12 +57,14 @@ test("PR chat snapshot excludes repository instructions, secrets, git data, and 
     assert.equal(await fs.readFile(path.join(snapshot, "src", "index.ts"), "utf8"), "export const safe = true;\n");
     for (const excluded of [
       ".git",
+      ".goose",
       ".opencode",
       ".agents",
       ".env",
       ".env.local",
       "AGENTS.md",
       "opencode.json",
+      ".goosehints",
       "secret-link"
     ]) {
       await assert.rejects(fs.lstat(path.join(snapshot, excluded)), { code: "ENOENT" });

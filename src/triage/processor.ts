@@ -1,8 +1,8 @@
 import type { Octokit } from "@octokit/rest";
 import { z } from "zod";
+import { runGoosePrompt } from "../ai/gooseCli.js";
 import { config } from "../config.js";
 import { logger } from "../logger.js";
-import { runOpenCodePrompt } from "../review/openCodeCliReviewer.js";
 import { withRetry } from "../retry.js";
 
 type TriageKind = "issue" | "pull_request";
@@ -97,14 +97,16 @@ async function processTriage(
   params: { owner: string; repo: string; kind: TriageKind; target: TriageTarget }
 ): Promise<void> {
   const candidates = await listCandidates(octokit, params);
-  const raw = await withRetry("opencode.run.triage", async () => {
-    return runOpenCodePrompt(buildTriagePrompt(params.kind, params.target, candidates));
-  });
+  const raw = await withRetry(
+    "goose.run.triage",
+    async () => runGoosePrompt(buildTriagePrompt(params.kind, params.target, candidates)),
+    { maxAttempts: 3 }
+  );
   const result = triageResultSchema.parse(JSON.parse(raw));
   const allowedLabels = new Set(config.triageLabels);
   const selectedLabels = [...new Set(result.labels.filter((label) => allowedLabels.has(label)))];
   if (selectedLabels.length === 0) {
-    throw new Error("OpenCode triage did not select any configured TRIAGE_LABELS value.");
+    throw new Error("goose triage did not select any configured TRIAGE_LABELS value.");
   }
 
   const likelyDuplicate =

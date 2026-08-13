@@ -51,12 +51,24 @@ const configSchema = z.object({
 
     return value;
   }, z.coerce.number().int().positive().optional()),
-  openCodeModel: optionalString.default("gpt-5.4"),
-  openCodeReasoningEffort: z.preprocess((value) => {
-    return value === "" ? undefined : value;
-  }, z.enum(["minimal", "low", "medium", "high", "xhigh"]).optional()),
-  openCodeBaseUrl: optionalString,
-  openCodeApiKey: optionalString,
+  gooseModel: optionalString.default("gpt-5.4"),
+  gooseThinkingEffort: z.preprocess((value) => {
+    if (value === "" || value === undefined) {
+      return undefined;
+    }
+
+    if (value === "minimal") {
+      return "low";
+    }
+
+    if (value === "xhigh") {
+      return "max";
+    }
+
+    return value;
+  }, z.enum(["off", "low", "medium", "high", "max"]).optional()),
+  gooseBaseUrl: optionalString,
+  gooseApiKey: optionalString,
   reviewPolicy: z.enum(["allow", "require_approval", "reject"]).default("require_approval"),
   reviewInstructions: optionalString,
   reviewBranches: csvListWithDefault([]),
@@ -80,10 +92,11 @@ export const config = configSchema.parse({
   githubAppId: process.env.GH_APP_ID ?? process.env.GITHUB_APP_ID,
   githubAppPrivateKey: process.env.GH_APP_PRIVATE_KEY ?? process.env.GITHUB_APP_PRIVATE_KEY,
   githubAppInstallationId: process.env.GH_APP_INSTALLATION_ID ?? process.env.GITHUB_APP_INSTALLATION_ID,
-  openCodeModel: process.env.OPENCODE_MODEL,
-  openCodeReasoningEffort: process.env.OPENCODE_REASONING_EFFORT,
-  openCodeBaseUrl: process.env.OPENCODE_BASE_URL,
-  openCodeApiKey: process.env.OPENCODE_API_KEY,
+  gooseModel: process.env.GOOSE_MODEL ?? process.env.OPENCODE_MODEL,
+  gooseThinkingEffort:
+    process.env.GOOSE_THINKING_EFFORT ?? process.env.OPENCODE_REASONING_EFFORT,
+  gooseBaseUrl: process.env.GOOSE_BASE_URL ?? process.env.OPENCODE_BASE_URL,
+  gooseApiKey: process.env.GOOSE_API_KEY ?? process.env.OPENCODE_API_KEY,
   reviewPolicy: process.env.REVIEW_POLICY,
   reviewInstructions: process.env.REVIEW_INSTRUCTIONS,
   reviewBranches: process.env.REVIEW_BRANCHES,

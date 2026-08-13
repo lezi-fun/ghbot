@@ -2,11 +2,11 @@
 
 [English](README.md)
 
-ghbot 是一个基于 GitHub Actions 和 OpenCode 的仓库机器人，用于审核 Pull Request、分类 Issue/PR、提示可能的重复项、回答 PR 中的代码问题，并可按仓库策略自动合并。
+ghbot 是一个基于 GitHub Actions 和 goose 的仓库机器人，用于审核 Pull Request、分类 Issue/PR、提示可能的重复项、回答 PR 中的代码问题，并可按仓库策略自动合并。
 
 ## Pull Request 审核
 
-OpenCode 的审核结果固定包含四个顶层字段：
+goose 的审核结果固定包含四个顶层字段：
 
 - `review`：具体但不强制阻止合并的逐行审核意见。
 - `change`：合并前必须解决的逐行问题。
@@ -43,7 +43,7 @@ ghbot 使用 GitHub API 按 PR 编号读取 metadata、完整文件列表和 dif
 - 已审核的 head SHA 和时间
 - 结构化的 `review/change/comment/result` 结果
 
-新 commit 触发 `synchronize` 后，workflow 会恢复该 PR 最新的缓存。OpenCode 同时收到旧审核结果和当前完整 PR diff，重新验证所有旧问题、移除已经修复的问题，并检查新 commit 引入的回归。旧的合并结论不会在没有新审核的情况下直接复用。
+新 commit 触发 `synchronize` 后，workflow 会恢复该 PR 最新的缓存。goose 同时收到旧审核结果和当前完整 PR diff，重新验证所有旧问题、移除已经修复的问题，并检查新 commit 引入的回归。旧的合并结论不会在没有新审核的情况下直接复用。
 
 PR 标题、描述或 base branch 变化触发 `edited` 时也会重新审核。PR 被关闭或合并后，机器人会删除本地缓存文件，并通过 Actions Cache API 删除该 PR 的远端缓存。缓存不保存 API key、完整 diff 或 prompt。
 
@@ -63,14 +63,14 @@ PR 标题、描述或 base branch 变化触发 `edited` 时也会重新审核。
 - `TRIAGE_ENABLED`：是否启用，默认 `true`。
 - `TRIAGE_LABELS`：分类标签白名单，默认 `bug,enhancement,documentation,question,maintenance`。
 - `TRIAGE_DUPLICATE_LABEL`：重复项标签，默认 `duplicate`。
-- `TRIAGE_CANDIDATE_LIMIT`：提供给 OpenCode 的最近同类候选数，默认 `50`，最大 `100`。
+- `TRIAGE_CANDIDATE_LIMIT`：提供给 goose 的最近同类候选数，默认 `50`，最大 `100`。
 - `TRIAGE_INSTRUCTIONS`：该仓库额外的分类规则。
 
-## PR 评论中的 OpenCode Agent
+## PR 评论中的 goose Agent
 
 在 PR conversation 中提到 `@bot` 即可询问当前 PR。配置的 `BOT_NAME` 也可以作为 mention；例如 `BOT_NAME=github-actions[bot]` 时，同时识别 `@github-actions` 和 `@github-actions[bot]`。
 
-这个 Agent 拥有完整 OpenCode 工具权限，可以在临时工作区中：
+这个 Agent 启用 goose 内置 Developer 工具，可以在临时工作区中：
 
 - 读取和搜索完整 PR 代码
 - 编辑临时文件
@@ -83,8 +83,8 @@ Agent 在一次性 Docker 容器中运行：
 
 - PR head checkout 不保存 GitHub credentials。
 - 容器只挂载经过净化的 PR 临时快照，不挂载 ghbot runtime 或宿主目录。
-- 快照排除 `.git`、`.env*`、符号链接，以及 OpenCode/Codex/Claude/Cursor/Agent 配置和指令文件。
-- 容器不会收到 `GITHUB_TOKEN`、GitHub App 凭证或真实 OpenCode API key。
+- 快照排除 `.git`、`.env*`、符号链接，以及 goose/OpenCode/Codex/Claude/Cursor/Agent 配置和指令文件。
+- 容器不会收到 `GITHUB_TOKEN`、GitHub App 凭证或真实 goose API key。
 - 一个短期本地代理使用单次随机令牌转发 `/chat/completions`；容器退出后代理立即关闭。
 - 容器可以修改临时快照，但不能 commit 或 push；快照在回答后删除。
 - 容器受 CPU、内存、进程数和 10 分钟运行时间限制。
@@ -92,19 +92,21 @@ Agent 在一次性 Docker 容器中运行：
 
 每条回复都按源评论 ID 去重，workflow 重跑不会重复回答；机器人自己的回复会被忽略，避免自触发循环。
 
-## OpenCode 配置
+## goose 配置
 
 必须添加 Actions Secret：
 
-- `OPENCODE_API_KEY`
+- `GOOSE_API_KEY`
 
 相关 Repository Variables：
 
-- `OPENCODE_BASE_URL`：OpenAI-compatible base URL，默认 `https://api.openai.com/v1`。填写到 `/v1`，不要包含 `/chat/completions`。
-- `OPENCODE_MODEL`：默认 `gpt-5.4`。
-- `OPENCODE_REASONING_EFFORT`：可选 `minimal`、`low`、`medium`、`high`、`xhigh`，workflow 默认 `high`。
+- `GOOSE_BASE_URL`：OpenAI-compatible base URL，默认 `https://api.openai.com/v1`。填写到 `/v1`，不要包含 `/chat/completions`。
+- `GOOSE_MODEL`：默认 `gpt-5.4`。
+- `GOOSE_THINKING_EFFORT`：可选 `off`、`low`、`medium`、`high`、`max`，workflow 默认 `high`。
 
-workflow 安装经过验证的 `opencode-ai@1.18.14`，并创建使用 `@ai-sdk/openai-compatible` 的隔离 provider，请求发送到 `/v1/chat/completions`。普通审核和分类禁用全部工具；只有通过权限检查的 PR comment Agent 在隔离容器内开放全部工具。
+workflow 安装固定版本 goose CLI `v1.46.0`。普通审核和分类使用 `GOOSE_MODE=chat`，不加载扩展也不执行工具；只有通过权限检查的 PR comment Agent 在一次性 Docker 容器中启用 Developer 扩展和自动工具权限。
+
+迁移期间仍兼容 `OPENCODE_API_KEY`、`OPENCODE_BASE_URL`、`OPENCODE_MODEL`、`OPENCODE_REASONING_EFFORT`，但新仓库应使用 `GOOSE_*` 名称。
 
 ## GitHub 认证和权限
 
@@ -151,7 +153,7 @@ lezi-fun/ghbot/.github/workflows/review-reusable.yml@main
 
 ```yaml
 secrets:
-  OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+  GOOSE_API_KEY: ${{ secrets.GOOSE_API_KEY }}
   GH_APP_ID: ${{ secrets.GH_APP_ID }}
   GH_APP_PRIVATE_KEY: ${{ secrets.GH_APP_PRIVATE_KEY }}
   GH_APP_INSTALLATION_ID: ${{ secrets.GH_APP_INSTALLATION_ID }}
@@ -180,7 +182,7 @@ npm run typecheck
 npm run build
 ```
 
-本地模拟事件时，先安装 `opencode-ai@1.18.14`，按 [.env.example](.env.example) 导出变量，再提供 `GITHUB_EVENT_NAME` 和 `GITHUB_EVENT_PATH`，运行：
+本地模拟事件时，先安装 goose CLI `v1.46.0`，按 [.env.example](.env.example) 导出变量，再提供 `GITHUB_EVENT_NAME` 和 `GITHUB_EVENT_PATH`，运行：
 
 ```bash
 node dist/src/actions/runReview.js

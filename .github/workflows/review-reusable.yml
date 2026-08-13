@@ -50,6 +50,18 @@ on:
         required: false
         type: string
         default: github-actions[bot]
+      goose_base_url:
+        required: false
+        type: string
+        default: ""
+      goose_model:
+        required: false
+        type: string
+        default: ""
+      goose_thinking_effort:
+        required: false
+        type: string
+        default: ""
       opencode_base_url:
         required: false
         type: string
@@ -119,8 +131,10 @@ on:
         type: string
         default: "false"
     secrets:
+      GOOSE_API_KEY:
+        required: false
       OPENCODE_API_KEY:
-        required: true
+        required: false
       GH_APP_ID:
         required: false
       GH_APP_PRIVATE_KEY:
@@ -167,8 +181,14 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: ghbot-runtime/package-lock.json
-      - name: Install OpenCode CLI
-        run: npm install -g opencode-ai@1.18.14
+      - name: Install goose CLI
+        env:
+          GOOSE_VERSION: v1.46.0
+          GOOSE_BIN_DIR: ${{ runner.temp }}/goose/bin
+          CONFIGURE: "false"
+        run: |
+          curl -fsSL https://github.com/aaif-goose/goose/releases/download/stable/download_cli.sh | bash
+          echo "${GOOSE_BIN_DIR}" >> "${GITHUB_PATH}"
       - run: npm ci
         working-directory: ghbot-runtime
       - run: npm run build
@@ -185,13 +205,13 @@ jobs:
         working-directory: ghbot-runtime
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          GOOSE_API_KEY: ${{ secrets.GOOSE_API_KEY || secrets.OPENCODE_API_KEY }}
           GH_APP_ID: ${{ secrets.GH_APP_ID || secrets.GITHUB_APP_ID }}
           GH_APP_PRIVATE_KEY: ${{ secrets.GH_APP_PRIVATE_KEY || secrets.GITHUB_APP_PRIVATE_KEY }}
           GH_APP_INSTALLATION_ID: ${{ secrets.GH_APP_INSTALLATION_ID || secrets.GITHUB_APP_INSTALLATION_ID }}
-          OPENCODE_BASE_URL: ${{ inputs.opencode_base_url }}
-          OPENCODE_MODEL: ${{ inputs.opencode_model }}
-          OPENCODE_REASONING_EFFORT: ${{ inputs.opencode_reasoning_effort }}
+          GOOSE_BASE_URL: ${{ inputs.goose_base_url || inputs.opencode_base_url }}
+          GOOSE_MODEL: ${{ inputs.goose_model || inputs.opencode_model }}
+          GOOSE_THINKING_EFFORT: ${{ inputs.goose_thinking_effort || inputs.opencode_reasoning_effort }}
           REVIEW_POLICY: ${{ inputs.review_policy }}
           REVIEW_INSTRUCTIONS: ${{ inputs.review_instructions }}
           REVIEW_BRANCHES: ${{ inputs.review_branches }}
@@ -234,8 +254,14 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: ghbot-runtime/package-lock.json
-      - name: Install OpenCode CLI
-        run: npm install -g opencode-ai@1.18.14
+      - name: Install goose CLI
+        env:
+          GOOSE_VERSION: v1.46.0
+          GOOSE_BIN_DIR: ${{ runner.temp }}/goose/bin
+          CONFIGURE: "false"
+        run: |
+          curl -fsSL https://github.com/aaif-goose/goose/releases/download/stable/download_cli.sh | bash
+          echo "${GOOSE_BIN_DIR}" >> "${GITHUB_PATH}"
       - run: npm ci
         working-directory: ghbot-runtime
       - run: npm run build
@@ -244,13 +270,13 @@ jobs:
         working-directory: ghbot-runtime
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          GOOSE_API_KEY: ${{ secrets.GOOSE_API_KEY || secrets.OPENCODE_API_KEY }}
           GH_APP_ID: ${{ secrets.GH_APP_ID || secrets.GITHUB_APP_ID }}
           GH_APP_PRIVATE_KEY: ${{ secrets.GH_APP_PRIVATE_KEY || secrets.GITHUB_APP_PRIVATE_KEY }}
           GH_APP_INSTALLATION_ID: ${{ secrets.GH_APP_INSTALLATION_ID || secrets.GITHUB_APP_INSTALLATION_ID }}
-          OPENCODE_BASE_URL: ${{ inputs.opencode_base_url }}
-          OPENCODE_MODEL: ${{ inputs.opencode_model }}
-          OPENCODE_REASONING_EFFORT: ${{ inputs.opencode_reasoning_effort }}
+          GOOSE_BASE_URL: ${{ inputs.goose_base_url || inputs.opencode_base_url }}
+          GOOSE_MODEL: ${{ inputs.goose_model || inputs.opencode_model }}
+          GOOSE_THINKING_EFFORT: ${{ inputs.goose_thinking_effort || inputs.opencode_reasoning_effort }}
           REVIEW_POLICY: ${{ inputs.review_policy }}
           REVIEW_INSTRUCTIONS: ${{ inputs.review_instructions }}
           REVIEW_BRANCHES: ${{ inputs.review_branches }}
