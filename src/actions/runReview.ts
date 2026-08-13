@@ -6,6 +6,7 @@ import { withRetry } from "../retry.js";
 import { processPullRequestChat } from "../chat/processor.js";
 import { processIssueTriage, processPullRequestTriage } from "../triage/processor.js";
 import { deleteLocalReviewCache } from "../review/cache.js";
+import { loadRepositoryKnowledge } from "../repository/knowledge.js";
 import {
   processConflictComment,
   processRecheckComment,
@@ -102,6 +103,11 @@ async function main(): Promise<void> {
   await restorePersistentCache(persistentCache).catch((error: unknown) => {
     logger.warn({ error, eventName }, "Persistent R2 cache restore failed; continuing without it.");
   });
+  if (config.repositoryKnowledgeEnabled) {
+    await loadRepositoryKnowledge().catch((error: unknown) => {
+      logger.warn({ error, eventName }, "Repository knowledge initialization failed; continuing without it.");
+    });
+  }
 
   const github = await createGitHubCredentials({
     owner: repository.owner.login,
