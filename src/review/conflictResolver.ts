@@ -430,11 +430,23 @@ function validateAgentChangePath(relativePath: string): void {
 
 async function assertConflictMarkersRemoved(root: string, conflictFiles: string[]): Promise<void> {
   for (const relativePath of conflictFiles) {
-    const content = await fs.readFile(safeFilePath(root, relativePath), "utf8");
+    const content = await fs.readFile(safeFilePath(root, relativePath), "utf8").catch((error: unknown) => {
+      if (isFileNotFoundError(error)) {
+        return undefined;
+      }
+      throw error;
+    });
+    if (content === undefined) {
+      continue;
+    }
     if (/^(?:<<<<<<<|=======|>>>>>>>)(?: |$)/m.test(content)) {
       throw new Error(`Conflict markers remain in ${relativePath}.`);
     }
   }
+}
+
+function isFileNotFoundError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 }
 
 function safeFilePath(root: string, relativePath: string): string {

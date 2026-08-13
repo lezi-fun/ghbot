@@ -31,6 +31,21 @@ test("repository knowledge persists in a repository-level cache file", async () 
   }
 });
 
+test("loading an empty repository knowledge cache initializes the persisted file", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ghbot-knowledge-initial-"));
+  try {
+    const knowledge = await loadRepositoryKnowledge(root);
+    assert.match(knowledge, /repository can evolve/i);
+    assert.equal(await loadRepositoryKnowledge(root), knowledge);
+    assert.equal(
+      await fs.readFile(path.join(root, ".ghbot-knowledge", "repository.md"), "utf8"),
+      knowledge
+    );
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("repository knowledge rejects credentials and oversized content", () => {
   assert.throws(
     () => validateRepositoryKnowledge("-----BEGIN PRIVATE KEY-----\nsecret"),

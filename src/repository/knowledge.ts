@@ -28,7 +28,9 @@ export async function loadRepositoryKnowledge(
     if (!isNotFoundError(error)) {
       throw error;
     }
-    return normalizeKnowledge(EMPTY_KNOWLEDGE);
+    const initial = normalizeKnowledge(EMPTY_KNOWLEDGE);
+    await saveRepositoryKnowledgeCache(initial, runtimeDirectory);
+    return initial;
   }
 }
 
