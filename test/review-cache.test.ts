@@ -1,9 +1,28 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { reviewCacheKeyPrefix } from "../src/review/cache.js";
+import { parseReviewCacheContent } from "../src/review/cache.js";
 
-test("review cache keys are isolated by repository and pull request", () => {
-  assert.equal(reviewCacheKeyPrefix("12345", 17), "ghbot-review-12345-pr-17-");
-  assert.notEqual(reviewCacheKeyPrefix("12345", 17), reviewCacheKeyPrefix("12345", 18));
-  assert.notEqual(reviewCacheKeyPrefix("12345", 17), reviewCacheKeyPrefix("67890", 17));
+test("review cache parser accepts the structured review result", () => {
+  const parsed = parseReviewCacheContent(JSON.stringify({
+    version: 1,
+    repository: "forumlify/public",
+    pullNumber: 17,
+    headSha: "a".repeat(40),
+    reviewedAt: "2026-08-13T00:00:00.000Z",
+    decision: {
+      review: [],
+      change: [],
+      comment: "Looks good.",
+      result: {
+        canMerge: true,
+        summary: "Safe to merge.",
+        shouldClosePullRequest: false,
+        closeReason: ""
+      }
+    }
+  }));
+  assert.equal(parsed.repository, "forumlify/public");
+  assert.equal(parsed.pullNumber, 17);
+  assert.equal(parsed.decision.result.canMerge, true);
+  assert.throws(() => parseReviewCacheContent("{}"));
 });

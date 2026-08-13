@@ -27,6 +27,7 @@ import { canAutoResolveConflicts, resolvePullRequestConflicts } from "./conflict
 const reviewer = new GooseReviewer();
 const CHECK_RUN_NAME = "ghbot review";
 export const RECHECK_COMMENT_COMMAND = "/recheck";
+export const CONFLICT_COMMENT_COMMAND = "/conflict";
 
 export async function processPullRequest(
   octokit: Octokit,
@@ -517,6 +518,128 @@ export async function processRecheckComment(
   );
 }
 
+export async function processConflictComment(
+  octokit: Octokit,
+  params: {
+    owner: string;
+    repo: string;
+    pullNumber: number;
+    commenterLogin: string;
+    commentBody: string;
+    gitToken?: string;
+  }
+): Promise<void> {
+  if (!isConflictComment(params.commentBody)) {
+    return;
+  }
+
+  const { data: permission } = await octokit.rest.repos.getCollaboratorPermissionLevel({
+    owner: params.owner,
+    repo: params.repo,
+    username: params.commenterLogin
+  }).catch((error: unknown) => {
+    if (isNotFoundError(error)) {
+      return { data: { permission: null } };
+    }
+    throw error;
+  });
+  if (!permission.permission || !new Set(["admin", "maintain", "write"]).has(permission.permission)) {
+    logger.info(
+      { ...params, commentBody: undefined, permission: permission.permission },
+      "Ignoring conflict command because commenter does not have write permission."
+    );
+    return;
+  }
+
+  const { data: pullRequest } = await octokit.rest.pulls.get({
+    owner: params.owner,
+    repo: params.repo,
+    pull_number: params.pullNumber
+  });
+  if (pullRequest.state !== "open" || pullRequest.draft || !isReviewBranchEnabled(pullRequest.base.ref)) {
+    await postConflictCommandComment(octokit, params, "This PR is not an open, non-draft pull request on a configured review branch, so no conflict-resolution commit was created.");
+    return;
+  }
+
+  const mergeablePullRequest = await waitForMergeable(octokit, params.owner, params.repo, params.pullNumber);
+  const eligible = canAutoResolveConflicts({
+    enabled: true,
+    reviewPassed: true,
+    mergeable: mergeablePullRequest.mergeable,
+    mergeableState: mergeablePullRequest.mergeable_state,
+    baseRepository: `${params.owner}/${params.repo}`,
+    headRepository: pullRequest.head.repo?.full_name ?? null,
+    expectedHeadSha: pullRequest.head.sha,
+    currentHeadSha: mergeablePullRequest.head.sha
+  });
+  if (!eligible) {
+    const reason = pullRequest.head.repo?.full_name !== `${params.owner}/${params.repo}`
+      ? "The PR comes from an external fork, and ghbot never pushes conflict-resolution commits to contributor forks."
+      : mergeablePullRequest.mergeable_state !== "dirty"
+        ? `GitHub does not currently report a merge conflict (mergeable=${mergeablePullRequest.mergeable}, mergeable_state=${mergeablePullRequest.mergeable_state}).`
+        : "The PR head changed while conflict eligibility was being checked. Run /conflict again on the latest head.";
+    await postConflictCommandComment(octokit, params, reason);
+    return;
+  }
+
+  const worktree = process.env.GHBOT_PR_WORKTREE;
+  if (!params.gitToken || !worktree) {
+    throw new Error("The /conflict command requires a git token and checked-out PR worktree.");
+  }
+
+  await postConflictCommandComment(
+    octokit,
+    params,
+    `Conflict resolution requested by @${params.commenterLogin}. goose is resolving the current head and will push only after the configured validation and a separate final confirmation pass succeed.`
+  );
+  try {
+    const repositoryKnowledge = config.repositoryKnowledgeEnabled
+      ? await loadRepositoryKnowledge().catch(() => undefined)
+      : undefined;
+    const resolved = await resolvePullRequestConflicts(octokit, {
+      owner: params.owner,
+      repo: params.repo,
+      pullNumber: params.pullNumber,
+      expectedHeadSha: pullRequest.head.sha,
+      baseBranch: pullRequest.base.ref,
+      headBranch: pullRequest.head.ref,
+      headRepository: pullRequest.head.repo?.full_name ?? null,
+      worktree,
+      gitToken: params.gitToken,
+      repositoryKnowledge
+    });
+    await postConflictCommandComment(
+      octokit,
+      params,
+      resolved
+        ? "goose resolved the conflicts, validated the complete result, and pushed a new commit. The new head will now receive a fresh review."
+        : "The PR changed or no resolvable conflict remained before push, so no commit was created."
+    );
+  } catch (error) {
+    logger.error({ error, ...params, commentBody: undefined }, "Manual conflict resolution failed safely.");
+    await postConflictCommandComment(
+      octokit,
+      params,
+      "goose could not safely resolve and validate the conflicts. No conflict-resolution commit was pushed."
+    );
+  }
+}
+
+async function postConflictCommandComment(
+  octokit: Octokit,
+  params: { owner: string; repo: string; pullNumber: number },
+  body: string
+): Promise<void> {
+  await withRetry("github.issues.createComment.conflictCommand", async () => {
+    return octokit.rest.issues.createComment({
+      owner: params.owner,
+      repo: params.repo,
+      issue_number: params.pullNumber,
+      body
+    });
+  });
+}
+
 async function maybeMergePullRequest(
   octokit: Octokit,
   params: {
@@ -918,6 +1041,10 @@ async function markReviewCheckApproved(
 
 export function isRecheckComment(body: string): boolean {
   return body.trim() === RECHECK_COMMENT_COMMAND;
+}
+
+export function isConflictComment(body: string): boolean {
+  return body.trim() === CONFLICT_COMMENT_COMMAND;
 }
 
 async function closeMaliciousPullRequest(

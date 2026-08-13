@@ -34,9 +34,9 @@ Use repository Actions variables to customize a caller repository:
 
 To make `require_approval` or `reject` prevent manual merges, add the `ghbot review` check as a required status check in the target branch's ruleset or branch protection settings. Without that repository rule, ghbot still reports `action_required`, but GitHub may allow an administrator or collaborator to merge manually.
 
-### Incremental review cache
+### Incremental review cache in Cloudflare R2
 
-Each successful review stores this metadata in GitHub Actions cache:
+When Cloudflare R2 is configured, each successful review stores this metadata in the private bucket:
 
 - repository and PR number
 - reviewed head SHA and timestamp
@@ -44,16 +44,24 @@ Each successful review stores this metadata in GitHub Actions cache:
 
 When a new commit triggers `synchronize`, or PR metadata/base changes trigger `edited`, the latest cache for that PR is restored. goose receives an earlier-head result plus the current complete PR patch, revalidates old findings, removes fixed findings, and checks the newest content. The previous merge decision is never reused without a fresh review. An `edited` event on the same head still runs a fresh complete review so title, description, and base-branch changes are respected.
 
-Cache keys are isolated by repository ID and PR number. Closing or merging a PR does not proactively delete its Actions cache; GitHub's normal cache retention policy removes old entries. Cache data contains no API keys, full diff, or prompt.
+Objects are isolated by repository ID and PR number. `latest.json` accelerates the next review, while `reviews/<head-sha>.json` preserves each successful head result. Closing or merging a PR does not proactively delete these objects. Cache data contains no API keys, full diff, or prompt.
+
+Configure all of these together:
+
+- Actions secrets: `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`
+- Repository variables: `R2_ENDPOINT`, `R2_BUCKET_NAME`
+- Optional repository variable: `R2_PREFIX`, a safe object-key namespace such as `forum-114614`
+
+Use a dedicated R2 token limited to read/write objects in this bucket. ghbot validates restored content and repository/PR identity before using it. R2 credentials are available only to the host process and are never forwarded to goose containers, PR validation commands, or git subprocesses. If R2 is absent or temporarily unavailable, review continues without persistent history.
 
 ### Self-improving repository knowledge cache
 
-ghbot can retain a concise repository knowledge file in GitHub Actions cache. It is isolated by repository ID and separate from each PR review cache, so it survives PR close and merge events. Automatic review can use durable facts such as architecture, supported environments, trusted validation commands, conventions, and recurring pitfalls.
+ghbot can retain a concise repository knowledge file in the same private R2 bucket. It is isolated by repository ID and separate from each PR review cache, so it survives PR close and merge events. Automatic review can use durable facts such as architecture, supported environments, trusted validation commands, conventions, and recurring pitfalls.
 
 - `REPOSITORY_KNOWLEDGE_ENABLED`: restore and use repository knowledge; default `true`.
 - `REPOSITORY_KNOWLEDGE_WRITE`: allow an authorized `@bot` goose Agent to improve the cached knowledge; default `false`.
 
-The Agent edits only a scratch copy at `.ghbot/repository-knowledge.md`. ghbot validates the result, rejects credentials/private keys and content over 32 KiB, then copies it to `.ghbot-knowledge/repository.md` in the reusable-workflow runtime. `actions/cache` persists that file under a repository-scoped key. It is never committed to the caller repository, and the Agent still receives no GitHub credentials.
+The Agent edits only a scratch copy at `.ghbot/repository-knowledge.md`. ghbot validates the result, rejects credentials/private keys and content over 32 KiB, then persists the runtime copy to a repository-scoped R2 object. It is never committed to the caller repository, and the Agent receives neither GitHub nor R2 credentials.
 
 ## Issue and PR triage
 
@@ -94,6 +102,8 @@ When repository knowledge writing is enabled, the Agent may improve its scratch 
 
 Set `AUTO_RESOLVE_CONFLICTS=true` to allow goose to repair a PR that passed review but GitHub reports as `mergeable=false` with `mergeable_state=dirty`. This is independent of `AUTO_MERGE`; conflict repair can be enabled while automatic merging remains disabled.
 
+A collaborator with `write`, `maintain`, or `admin` permission can also explicitly request the same guarded repair by posting the exact command `/conflict`. This manual command works even when `AUTO_RESOLVE_CONFLICTS=false`; it does not require an earlier passing review because the resulting commit always triggers a new complete review before any merge decision.
+
 Conflict repair applies only to a current-head PR branch in the same repository. External forks, stale heads, non-dirty states, and failed reviews are skipped. ghbot creates the merge locally, gives goose a sanitized credential-free snapshot, and allows it to change direct conflict files plus related callers, types, tests, lockfiles, configuration, or documentation when necessary for compatibility. Protected agent/configuration and credential paths are rejected.
 
 After applying the proposed files, ghbot verifies there are no unmerged paths and runs `git diff --check`. A second isolated goose pass reviews the complete staged diff and, when configured, runs the trusted `CONFLICT_TEST_COMMAND`. The result is committed and pushed only when that final pass returns `safeToCommit=true` and the remote PR head still matches the reviewed SHA. ghbot never force-pushes. The new commit triggers a fresh `synchronize` review; the old decision is not reused as approval.
@@ -126,7 +136,6 @@ The workflow always receives `github.token`, so no `GITHUB_TOKEN` repository sec
 
 Workflow permissions:
 
-- `actions: write`: save and restore Actions cache.
 - `contents: write`: optional merge and repository operations.
 - `pull-requests: write`: list PRs, create reviews, and merge.
 - `issues: write`: list issues/PRs, add labels, create labels, and post comments.
@@ -135,7 +144,6 @@ Workflow permissions:
 
 For a GitHub App, configure these repository permissions:
 
-- Actions: read and write
 - Contents: read and write
 - Pull requests: read and write
 - Issues: read and write
@@ -168,6 +176,8 @@ secrets:
   GH_APP_ID: ${{ secrets.GH_APP_ID }}
   GH_APP_PRIVATE_KEY: ${{ secrets.GH_APP_PRIVATE_KEY }}
   GH_APP_INSTALLATION_ID: ${{ secrets.GH_APP_INSTALLATION_ID }}
+  R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
 ```
 
 See the checked-in wrapper for all `with:` inputs and repository-variable mappings.
@@ -181,6 +191,16 @@ An eligible repository user can comment:
 ```
 
 The bot reruns the complete current PR review using the repository's configured `REVIEW_STRICTNESS`. Only users with `write`, `maintain`, or `admin` permission can request it. The old `/lenient-check` command is no longer accepted.
+
+## Manual conflict repair
+
+An eligible repository user can comment the exact command:
+
+```text
+/conflict
+```
+
+The bot attempts conflict repair only when GitHub reports the current open PR as conflicted and its head branch belongs to the same repository. External forks are never pushed. It runs the same configured validation and separate final goose confirmation used by automatic repair, then pushes a normal commit only if both succeed and the head has not changed.
 
 ## Local development
 

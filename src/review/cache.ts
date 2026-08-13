@@ -32,6 +32,14 @@ const reviewCacheSchema = z.object({
   decision: reviewDecisionSchema
 });
 
+export function parseReviewCacheContent(content: string) {
+  return reviewCacheSchema.parse(JSON.parse(content));
+}
+
+export function validateReviewCacheContent(content: string): void {
+  parseReviewCacheContent(content);
+}
+
 export type PreviousReview = {
   headSha: string;
   reviewedAt: string;
@@ -100,10 +108,6 @@ export async function saveReviewCache(params: {
 
 export async function deleteLocalReviewCache(pullNumber: number): Promise<void> {
   await fs.rm(cachePath(pullNumber), { force: true });
-}
-
-export function reviewCacheKeyPrefix(repositoryId: string, pullNumber: number): string {
-  return `ghbot-review-${repositoryId}-pr-${pullNumber}-`;
 }
 
 function cachePath(pullNumber: number): string {

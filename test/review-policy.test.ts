@@ -11,7 +11,7 @@ import {
   parseReviewStateMarker
 } from "../src/review/policy.js";
 import { config } from "../src/config.js";
-import { isRecheckComment } from "../src/review/processor.js";
+import { isConflictComment, isRecheckComment } from "../src/review/processor.js";
 
 const cleanDecision: ReviewDecision = {
   review: [],
@@ -121,6 +121,13 @@ test("only the exact recheck command triggers a manual review", () => {
   assert.equal(isRecheckComment("  /recheck\n"), true);
   assert.equal(isRecheckComment("/lenient-check"), false);
   assert.equal(isRecheckComment("/recheck something"), false);
+});
+
+test("only the exact conflict command triggers manual conflict resolution", () => {
+  assert.equal(isConflictComment("/conflict"), true);
+  assert.equal(isConflictComment("  /conflict\n"), true);
+  assert.equal(isConflictComment("/conflicts"), false);
+  assert.equal(isConflictComment("/conflict now"), false);
 });
 
 test("only the latest decisive review per user can approve the current head", () => {

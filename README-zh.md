@@ -36,9 +36,9 @@ goose 的审核结果固定包含四个顶层字段：
 
 普通自动审核使用 GitHub API 按 PR 编号读取 metadata、完整文件列表和 diff，不执行不可信 PR 代码。只有显式开启冲突修复时才 checkout PR head，而且执行和测试都在无 GitHub 凭据的一次性净化容器中完成。来自 fork 或没有仓库权限的外部贡献者仍会正常得到自动审核，但不会被自动推送冲突修复。
 
-## 增量审核缓存
+## Cloudflare R2 增量审核缓存
 
-每次成功审核会把以下信息保存到 GitHub Actions cache：
+配置 Cloudflare R2 后，每次成功审核会把以下信息保存到私有存储桶：
 
 - 仓库和 PR 编号
 - 已审核的 head SHA 和时间
@@ -46,16 +46,24 @@ goose 的审核结果固定包含四个顶层字段：
 
 新 commit 触发 `synchronize` 后，workflow 会恢复该 PR 最新的缓存。goose 同时收到旧审核结果和当前完整 PR diff，重新验证所有旧问题、移除已经修复的问题，并检查新 commit 引入的回归。旧的合并结论不会在没有新审核的情况下直接复用。
 
-PR 标题、描述或 base branch 变化触发 `edited` 时也会重新审核。关闭或合并 PR 不会主动删除 Actions cache；旧条目由 GitHub 的常规缓存保留策略自然清理。缓存不保存 API key、完整 diff 或 prompt。
+PR 标题、描述或 base branch 变化触发 `edited` 时也会重新审核。对象按仓库 ID 和 PR 编号隔离；`latest.json` 用于加速下一次审核，`reviews/<head-sha>.json` 留存每个成功审核过的 head。关闭或合并 PR 不会主动删除这些对象。缓存不保存 API key、完整 diff 或 prompt。
+
+需要同时配置：
+
+- Actions Secrets：`R2_ACCESS_KEY_ID`、`R2_SECRET_ACCESS_KEY`
+- Repository Variables：`R2_ENDPOINT`、`R2_BUCKET_NAME`
+- 可选 Variable：`R2_PREFIX`，例如 `forum-114614`
+
+建议使用只允许读写这个存储桶对象的专用 R2 Token。ghbot 使用恢复内容前会校验格式以及仓库/PR 身份。R2 密钥只交给宿主进程，不会传入 goose 容器、PR 测试命令或 git 子进程。未配置 R2 或 R2 暂时故障时，审核仍会继续，只是不使用持久历史。
 
 ## 可自我改进的仓库认知缓存
 
-ghbot 可以把一份简洁的仓库认知文件保存在 GitHub Actions cache 中。它按仓库 ID 隔离，与单个 PR 的审核缓存分开，因此 PR 关闭或合并时不会删除。自动审核可以参考其中长期有效的架构、支持环境、可信测试命令、代码约定和常见坑。
+ghbot 可以把一份简洁的仓库认知文件保存在同一个私有 R2 存储桶中。它按仓库 ID 隔离，与单个 PR 的审核缓存分开，因此 PR 关闭或合并时不会删除。自动审核可以参考其中长期有效的架构、支持环境、可信测试命令、代码约定和常见坑。
 
 - `REPOSITORY_KNOWLEDGE_ENABLED`：恢复并使用仓库认知，默认 `true`。
 - `REPOSITORY_KNOWLEDGE_WRITE`：允许有权限的 `@bot` goose Agent 改进认知缓存，默认 `false`。
 
-Agent 只能编辑临时快照中的 `.ghbot/repository-knowledge.md` 草稿。ghbot 会校验内容，拒绝凭证、私钥和超过 32 KiB 的内容，再把它复制到 reusable workflow runtime 的 `.ghbot-knowledge/repository.md`，由 `actions/cache` 用仓库级 key 持久化。它不会提交到业务仓库，Agent 仍然拿不到 GitHub 凭证。
+Agent 只能编辑临时快照中的 `.ghbot/repository-knowledge.md` 草稿。ghbot 会校验内容，拒绝凭证、私钥和超过 32 KiB 的内容，再把 runtime 副本持久化到按仓库隔离的 R2 对象。它不会提交到业务仓库，Agent 也拿不到 GitHub 或 R2 凭证。
 
 ## Issue 和 PR 分类
 
@@ -108,6 +116,8 @@ Agent 在一次性 Docker 容器中运行：
 
 设置 `AUTO_RESOLVE_CONFLICTS=true` 后，如果 AI 审核已经通过，但 GitHub 报告 `mergeable=false` 且 `mergeable_state=dirty`，goose 可以自动解决冲突。它与 `AUTO_MERGE` 相互独立，因此可以只开启冲突修复而继续禁止自动合并。
 
+具有 `write`、`maintain` 或 `admin` 权限的协作者也可以评论精确命令 `/conflict`，显式要求执行同一套受保护的冲突修复。即使 `AUTO_RESOLVE_CONFLICTS=false`，该命令也可以运行；它不要求先有一次通过的审核，因为修复提交 push 后一定会对新 head 重新完整审核，修复动作本身不会直接批准合并。
+
 仅处理当前 head 未变化且 PR 分支位于同一仓库的情况；外部 fork、旧 head、非冲突状态和未通过审核的 PR 都会跳过。ghbot 在宿主生成本地 merge，再把无 `.git`、无凭据的净化快照交给 goose。goose 可以修改直接冲突文件，也可以在兼容性确有需要时调整相关调用方、类型、测试、lockfile、配置或文档；受保护的 Agent 配置和凭证路径会被拒绝。
 
 应用改动后，ghbot 检查未合并路径和 `git diff --check`。第二次隔离 goose 会审核完整 staged diff，并在配置后运行可信的 `CONFLICT_TEST_COMMAND`。只有第二次确认明确返回 `safeToCommit=true`，且远端 PR head 仍与审核 SHA 相同，才会创建普通 merge commit 并 push；绝不 force-push。新 commit 会触发 `synchronize` 并重新完整审核，不会把修复前的结论直接当作批准。
@@ -134,7 +144,6 @@ workflow 自动获得 `github.token`，无需额外创建名为 `GITHUB_TOKEN` �
 
 workflow 声明以下权限：
 
-- `actions: write`：保存和恢复 Actions cache。
 - `contents: write`：可选自动合并和仓库操作。
 - `pull-requests: write`：列出 PR、提交 review 和合并。
 - `issues: write`：列出 Issue/PR、管理标签和发布评论。
@@ -143,7 +152,6 @@ workflow 声明以下权限：
 
 GitHub App 建议配置以下 Repository permissions：
 
-- Actions：Read and write
 - Contents：Read and write
 - Pull requests：Read and write
 - Issues：Read and write
@@ -160,7 +168,7 @@ GitHub App 建议配置以下 Repository permissions：
 
 GitHub Actions Secret 和 Variable 名称不能以 `GITHUB_` 开头，所以使用上述 `GH_APP_*` 名称。
 
-GitHub App 和 workflow token 在拥有对应权限时都可以列出 Issue、PR 和标签。Actions cache 由 workflow 的 `github.token` 和 `actions/cache` 管理，不会在 PR 关闭时由 App 主动删除。
+GitHub App 和 workflow token 在拥有对应权限时都可以列出 Issue、PR 和标签。R2 缓存与 GitHub App 权限无关，也不会在 PR 关闭时主动删除。
 
 ## 在其他仓库中复用
 
@@ -178,6 +186,8 @@ secrets:
   GH_APP_ID: ${{ secrets.GH_APP_ID }}
   GH_APP_PRIVATE_KEY: ${{ secrets.GH_APP_PRIVATE_KEY }}
   GH_APP_INSTALLATION_ID: ${{ secrets.GH_APP_INSTALLATION_ID }}
+  R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
 ```
 
 完整的 `with:` 输入和 Repository Variables 映射请参考仓库内的 wrapper workflow。
@@ -191,6 +201,16 @@ secrets:
 ```
 
 机器人会按照仓库当前的 `REVIEW_STRICTNESS` 对最新完整 PR 重新审核。只有具有 `write`、`maintain` 或 `admin` 权限的用户可以触发；旧 `/lenient-check` 命令不再生效。
+
+## 手动解决冲突
+
+有资格的仓库用户可以评论精确命令：
+
+```text
+/conflict
+```
+
+只有当 GitHub 报告当前开放 PR 存在冲突，且 head 分支属于同一个仓库时才会尝试修复。机器人不会向外部 fork push。它会运行与自动修复相同的可信验证命令和第二次 goose 最终确认；两者成功且远端 head 未变化时才会创建普通 commit 并 push。
 
 ## 本地开发
 

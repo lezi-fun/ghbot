@@ -98,6 +98,18 @@ on:
         required: false
         type: string
         default: "false"
+      r2_endpoint:
+        required: false
+        type: string
+        default: ""
+      r2_bucket_name:
+        required: false
+        type: string
+        default: ""
+      r2_prefix:
+        required: false
+        type: string
+        default: ""
       triage_enabled:
         required: false
         type: string
@@ -167,9 +179,12 @@ on:
         required: false
       GITHUB_APP_INSTALLATION_ID:
         required: false
+      R2_ACCESS_KEY_ID:
+        required: false
+      R2_SECRET_ACCESS_KEY:
+        required: false
 
 permissions:
-  actions: write
   contents: write
   pull-requests: write
   checks: write
@@ -199,8 +214,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          cache: npm
-          cache-dependency-path: ghbot-runtime/package-lock.json
       - name: Install goose CLI
         env:
           GOOSE_VERSION: v1.46.0
@@ -213,21 +226,6 @@ jobs:
         working-directory: ghbot-runtime
       - run: npm run build
         working-directory: ghbot-runtime
-      - name: Restore repository knowledge
-        uses: actions/cache@v4
-        with:
-          path: ghbot-runtime/.ghbot-knowledge/repository.md
-          key: ghbot-knowledge-${{ github.repository_id }}-${{ github.run_id }}
-          restore-keys: |
-            ghbot-knowledge-${{ github.repository_id }}-
-      - name: Restore previous PR review
-        if: ${{ inputs.event_name == 'pull_request_target' && inputs.event_action != 'closed' }}
-        uses: actions/cache@v4
-        with:
-          path: ghbot-runtime/.ghbot-cache/pr-${{ inputs.pull_number }}.json
-          key: ghbot-review-${{ github.repository_id }}-pr-${{ inputs.pull_number }}-${{ github.run_id }}
-          restore-keys: |
-            ghbot-review-${{ github.repository_id }}-pr-${{ inputs.pull_number }}-
       - run: node dist/src/actions/runReview.js
         working-directory: ghbot-runtime
         env:
@@ -245,6 +243,11 @@ jobs:
           REVIEW_BRANCHES: ${{ inputs.review_branches }}
           REPOSITORY_KNOWLEDGE_ENABLED: ${{ inputs.repository_knowledge_enabled }}
           REPOSITORY_KNOWLEDGE_WRITE: ${{ inputs.repository_knowledge_write }}
+          R2_ENDPOINT: ${{ inputs.r2_endpoint }}
+          R2_BUCKET_NAME: ${{ inputs.r2_bucket_name }}
+          R2_PREFIX: ${{ inputs.r2_prefix }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           TRIAGE_ENABLED: ${{ inputs.triage_enabled }}
           TRIAGE_LABELS: ${{ inputs.triage_labels }}
           TRIAGE_DUPLICATE_LABEL: ${{ inputs.triage_duplicate_label }}
@@ -284,8 +287,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          cache: npm
-          cache-dependency-path: ghbot-runtime/package-lock.json
       - name: Install goose CLI
         env:
           GOOSE_VERSION: v1.46.0
@@ -298,13 +299,6 @@ jobs:
         working-directory: ghbot-runtime
       - run: npm run build
         working-directory: ghbot-runtime
-      - name: Restore repository knowledge
-        uses: actions/cache@v4
-        with:
-          path: ghbot-runtime/.ghbot-knowledge/repository.md
-          key: ghbot-knowledge-${{ github.repository_id }}-${{ github.run_id }}
-          restore-keys: |
-            ghbot-knowledge-${{ github.repository_id }}-
       - run: node dist/src/actions/runReview.js
         working-directory: ghbot-runtime
         env:
@@ -322,6 +316,11 @@ jobs:
           REVIEW_BRANCHES: ${{ inputs.review_branches }}
           REPOSITORY_KNOWLEDGE_ENABLED: ${{ inputs.repository_knowledge_enabled }}
           REPOSITORY_KNOWLEDGE_WRITE: ${{ inputs.repository_knowledge_write }}
+          R2_ENDPOINT: ${{ inputs.r2_endpoint }}
+          R2_BUCKET_NAME: ${{ inputs.r2_bucket_name }}
+          R2_PREFIX: ${{ inputs.r2_prefix }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           TRIAGE_ENABLED: ${{ inputs.triage_enabled }}
           TRIAGE_LABELS: ${{ inputs.triage_labels }}
           TRIAGE_DUPLICATE_LABEL: ${{ inputs.triage_duplicate_label }}

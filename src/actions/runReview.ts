@@ -7,14 +7,17 @@ import { processPullRequestChat } from "../chat/processor.js";
 import { processIssueTriage, processPullRequestTriage } from "../triage/processor.js";
 import { deleteLocalReviewCache } from "../review/cache.js";
 import {
+  processConflictComment,
   processRecheckComment,
   processPullRequest,
   processScheduledPendingMerges,
   processPullRequestReviewApproval,
   shouldReviewPullRequest
 } from "../review/processor.js";
+import { restorePersistentCache, savePersistentCache } from "../storage/cacheStore.js";
 
 type GitHubRepository = {
+  id?: number;
   name: string;
   owner: {
     login: string;
@@ -82,19 +85,34 @@ async function main(): Promise<void> {
     ? buildPayloadFromWorkflowCallEnv(workflowCallEventName)
     : readPayloadFromGitHubEventPath();
   const repository = payload.repository;
-  const github = await createGitHubCredentials({
-    owner: repository.owner.login,
-    repo: repository.name
-  });
-  const octokit = github.octokit;
   const eventName = workflowCallEventName ?? process.env.GITHUB_EVENT_NAME;
 
   if (!eventName) {
     throw new Error("GITHUB_EVENT_NAME is required.");
   }
 
+  const pullNumberForCache = getPullNumberForCache(eventName, payload);
+  const persistentCache = {
+    repositoryId: process.env.GHBOT_REPOSITORY_ID || String(repository.id ?? ""),
+    owner: repository.owner.login,
+    repo: repository.name,
+    pullNumber: pullNumberForCache,
+    prefix: config.r2Prefix
+  };
+  await restorePersistentCache(persistentCache).catch((error: unknown) => {
+    logger.warn({ error, eventName }, "Persistent R2 cache restore failed; continuing without it.");
+  });
+
+  const github = await createGitHubCredentials({
+    owner: repository.owner.login,
+    repo: repository.name
+  });
+  const octokit = github.octokit;
+
   logger.info({ eventName }, "Handling GitHub Actions review event.");
 
+  let eventFailed = false;
+  try {
   if (eventName === "pull_request_target") {
     const prPayload = payload as PullRequestPayload;
     const ref = {
@@ -171,6 +189,14 @@ async function main(): Promise<void> {
       commentBody: commentPayload.comment.body,
       gitToken: github.token
     });
+    await processConflictComment(octokit, {
+      owner: commentPayload.repository.owner.login,
+      repo: commentPayload.repository.name,
+      pullNumber: commentPayload.issue.number,
+      commenterLogin: commentPayload.comment.user.login,
+      commentBody: commentPayload.comment.body,
+      gitToken: github.token
+    });
     await processPullRequestChat(octokit, {
       owner: commentPayload.repository.owner.login,
       repo: commentPayload.repository.name,
@@ -211,6 +237,33 @@ async function main(): Promise<void> {
   }
 
   logger.warn({ eventName }, "Unhandled GitHub Actions event.");
+  } catch (error) {
+    eventFailed = true;
+    throw error;
+  } finally {
+    if (!eventFailed) {
+      await savePersistentCache(persistentCache).catch((error: unknown) => {
+        logger.warn({ error, eventName }, "Persistent R2 cache save failed; review results remain valid for this run.");
+      });
+    }
+  }
+}
+
+function getPullNumberForCache(
+  eventName: string,
+  payload: PullRequestPayload | IssuePayload | IssueCommentPayload | PullRequestReviewPayload | ScheduledPayload
+): number | undefined {
+  if (eventName === "pull_request_target") {
+    return (payload as PullRequestPayload).pull_request.number;
+  }
+  if (eventName === "issue_comment") {
+    const commentPayload = payload as IssueCommentPayload;
+    return commentPayload.issue.pull_request ? commentPayload.issue.number : undefined;
+  }
+  if (eventName === "pull_request_review") {
+    return (payload as PullRequestReviewPayload).pull_request.number;
+  }
+  return undefined;
 }
 
 function readPayloadFromGitHubEventPath(): PullRequestPayload | IssuePayload | IssueCommentPayload | PullRequestReviewPayload | ScheduledPayload {
@@ -233,6 +286,7 @@ function buildPayloadFromWorkflowCallEnv(eventName: string): PullRequestPayload 
   }
 
   const repository = {
+    id: Number(process.env.GHBOT_REPOSITORY_ID) || undefined,
     name: repo,
     owner: {
       login: owner
