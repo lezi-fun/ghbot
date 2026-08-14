@@ -32,9 +32,11 @@ const finalConfirmationSchema = z.object({
   concerns: z.array(z.string())
 });
 
-const CONFLICT_TOTAL_TIMEOUT_MS = 12 * 60 * 1000;
-const CONFLICT_AGENT_TIMEOUT_MS = 4 * 60 * 1000;
-const CONFLICT_VALIDATION_TIMEOUT_MS = 3 * 60 * 1000;
+const CONFLICT_TOTAL_TIMEOUT_MS = 25 * 60 * 1000;
+const CONFLICT_INITIAL_AGENT_TIMEOUT_MS = 10 * 60 * 1000;
+const CONFLICT_CORRECTION_AGENT_TIMEOUT_MS = 5 * 60 * 1000;
+const CONFLICT_VALIDATION_TIMEOUT_MS = 7 * 60 * 1000;
+const CONFLICT_CONFIRMATION_TIMEOUT_MS = 5 * 60 * 1000;
 
 type SnapshotFile = {
   hash: string;
@@ -176,7 +178,7 @@ export async function resolvePullRequestConflicts(
     const beforeAgent = await inventorySnapshot(snapshot);
     try {
       await runGooseAgent(buildConflictPrompt(params, conflictFiles), snapshot, {
-        timeoutMs: remainingConflictTime(resolutionStartedAt, CONFLICT_AGENT_TIMEOUT_MS)
+        timeoutMs: remainingConflictTime(resolutionStartedAt, CONFLICT_INITIAL_AGENT_TIMEOUT_MS)
       });
     } catch (error) {
       if (error instanceof Error && error.message.toLowerCase().includes("timed out")) {
@@ -240,7 +242,7 @@ export async function resolvePullRequestConflicts(
       const previousAgent = afterAgent;
       try {
         await runGooseAgent(buildDiffCheckRepairPrompt(commandFailureOutput(diffCheck)), snapshot, {
-          timeoutMs: remainingConflictTime(resolutionStartedAt, CONFLICT_AGENT_TIMEOUT_MS)
+          timeoutMs: remainingConflictTime(resolutionStartedAt, CONFLICT_CORRECTION_AGENT_TIMEOUT_MS)
         });
       } catch (error) {
         if (error instanceof Error && error.message.toLowerCase().includes("timed out")) {
@@ -293,7 +295,7 @@ export async function resolvePullRequestConflicts(
           testCommand: config.conflictTestCommand,
           output: validationSummary
         }), snapshot, {
-          timeoutMs: remainingConflictTime(resolutionStartedAt, CONFLICT_AGENT_TIMEOUT_MS)
+          timeoutMs: remainingConflictTime(resolutionStartedAt, CONFLICT_CORRECTION_AGENT_TIMEOUT_MS)
         });
         afterAgent = await inventorySnapshot(snapshot);
         const validationRepairChanges = diffSnapshotInventories(previousAgent, afterAgent);
@@ -360,7 +362,7 @@ export async function resolvePullRequestConflicts(
       diff: finalDiff,
       repositoryKnowledge: knowledge,
       validationSummary
-    }, snapshot, remainingConflictTime(resolutionStartedAt, CONFLICT_AGENT_TIMEOUT_MS));
+    }, snapshot, remainingConflictTime(resolutionStartedAt, CONFLICT_CONFIRMATION_TIMEOUT_MS));
     const afterConfirmation = await inventorySnapshot(snapshot);
     if (diffSnapshotInventories(beforeConfirmation, afterConfirmation).length > 0) {
       throw new Error("Final goose confirmation modified the workspace during its read-only pass.");
@@ -511,13 +513,13 @@ export function describeConflictResolutionFailure(error: unknown): string {
     return "goose produced a candidate resolution, but the configured validation or final safety confirmation rejected it. No commit was pushed.";
   }
   if (message.includes("conflict resolution timed out")) {
-    return "Conflict repair exceeded its 12-minute total time budget and stopped safely. No commit was pushed.";
+    return "Conflict repair exceeded its 25-minute total time budget and stopped safely. No commit was pushed.";
   }
   if (message.includes("initial goose conflict-editing pass timed out")) {
-    return "The initial conflict-editing pass exceeded its 4-minute limit. No commit was pushed.";
+    return "The initial conflict-editing pass exceeded its 10-minute limit. No commit was pushed.";
   }
   if (message.includes("git diff --check goose correction timed out")) {
-    return "The whitespace or conflict-marker correction pass exceeded its 4-minute limit. No commit was pushed.";
+    return "The whitespace or conflict-marker correction pass exceeded its 5-minute limit. No commit was pushed.";
   }
   if (message.includes("git diff --check failed")) {
     return "The candidate resolution still contained Git whitespace or conflict-marker errors after one automatic correction pass. No commit was pushed.";

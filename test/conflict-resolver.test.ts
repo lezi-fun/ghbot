@@ -82,11 +82,11 @@ test("conflict failures are actionable without exposing raw command output", () 
   );
   assert.match(
     describeConflictResolutionFailure(new Error("git diff --check goose correction timed out")),
-    /4-minute limit/
+    /5-minute limit/
   );
   assert.match(
     describeConflictResolutionFailure(new Error("initial goose conflict-editing pass timed out")),
-    /initial conflict-editing pass.*4-minute limit/i
+    /initial conflict-editing pass.*10-minute limit/i
   );
   assert.match(
     describeConflictResolutionFailure(new Error("rejected: stale info")),
