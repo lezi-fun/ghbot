@@ -219,7 +219,7 @@ export async function resolvePullRequestConflicts(
 
     const finalDiff = await runCommand(
       "git",
-      ["diff", "--cached", "--no-ext-diff", "--unified=80"],
+      buildConflictReviewDiffArgs(agentChanges),
       worktree,
       gitEnv
     );
@@ -343,6 +343,16 @@ export function buildConflictPushArgs(params: {
   ];
 }
 
+export function buildConflictReviewDiffArgs(changedFiles: string[]): string[] {
+  if (changedFiles.length === 0) {
+    throw new Error("Conflict review requires at least one agent-changed file.");
+  }
+  for (const file of changedFiles) {
+    validateAgentChangePath(file);
+  }
+  return ["diff", "--cached", "--no-ext-diff", "--unified=80", "--", ...changedFiles];
+}
+
 export function describeConflictResolutionFailure(error: unknown): string {
   const message = error instanceof Error ? error.message.toLowerCase() : "";
   if (message.includes("refusing to merge unrelated histories") || message.includes("shallow")) {
@@ -372,6 +382,9 @@ export function describeConflictResolutionFailure(error: unknown): string {
   }
   if (message.includes("git diff --check failed")) {
     return "The candidate resolution still contained Git whitespace or conflict-marker errors after one automatic correction pass. No commit was pushed.";
+  }
+  if (message.includes("resolved staged diff contains")) {
+    return "The AI-touched conflict-resolution diff exceeded the configured patch-size limit, so final confirmation was not attempted. No commit was pushed.";
   }
   return "goose could not safely complete and validate the conflict resolution. The Actions log contains the exact failure stage, and no commit was pushed.";
 }

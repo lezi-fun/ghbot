@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildConflictPushArgs,
+  buildConflictReviewDiffArgs,
   canAutoResolveConflicts,
   describeConflictResolutionFailure,
   diffSnapshotInventories
@@ -31,6 +32,20 @@ test("only a passing conflicted writable current head is eligible", () => {
   }), true);
   assert.equal(canAutoResolveConflicts({ ...eligible, currentHeadSha: "new-head" }), false);
   assert.equal(canAutoResolveConflicts({ ...eligible, enabled: false }), false);
+});
+
+test("conflict final review scopes the diff to agent-changed files", () => {
+  assert.deepEqual(buildConflictReviewDiffArgs(["server.js", "public/js/app.js"]), [
+    "diff",
+    "--cached",
+    "--no-ext-diff",
+    "--unified=80",
+    "--",
+    "server.js",
+    "public/js/app.js"
+  ]);
+  assert.throws(() => buildConflictReviewDiffArgs([]), /at least one agent-changed file/);
+  assert.throws(() => buildConflictReviewDiffArgs([".env"]), /protected path/);
 });
 
 test("conflict failures are actionable without exposing raw command output", () => {
