@@ -213,7 +213,7 @@ jobs:
           repository: ${{ inputs.repository_owner }}/${{ inputs.repository_name }}
           ref: refs/pull/${{ inputs.pull_number }}/head
           path: pr-worktree
-          fetch-depth: 1
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:

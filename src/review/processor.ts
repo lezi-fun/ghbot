@@ -23,7 +23,11 @@ import {
 } from "./policy.js";
 import { compactFilesForReview } from "./prompt.js";
 import { loadRepositoryKnowledge } from "../repository/knowledge.js";
-import { canAutoResolveConflicts, resolvePullRequestConflicts } from "./conflictResolver.js";
+import {
+  canAutoResolveConflicts,
+  describeConflictResolutionFailure,
+  resolvePullRequestConflicts
+} from "./conflictResolver.js";
 
 const reviewer = new GooseReviewer();
 const CHECK_RUN_NAME = "ghbot review";
@@ -210,13 +214,13 @@ export async function processPullRequest(
           return;
         }
       } catch (error) {
-        logger.error({ error, owner, repo, pullNumber }, "Automatic conflict resolution failed safely.");
+        logger.error({ err: error, owner, repo, pullNumber }, "Automatic conflict resolution failed safely.");
         await withRetry("github.issues.createComment.conflictResolutionFailed", async () => {
           return octokit.rest.issues.createComment({
             owner,
             repo,
             issue_number: pullNumber,
-            body: "Automated review passed, but goose could not safely resolve and validate the merge conflicts. No conflict-resolution commit was pushed."
+            body: `Automated review passed, but ${describeConflictResolutionFailure(error)}`
           });
         });
         return;
@@ -639,7 +643,14 @@ export async function processConflictComment(
   });
   if (!permission.permission || !new Set(["admin", "maintain", "write"]).has(permission.permission)) {
     logger.info(
-      { ...params, commentBody: undefined, permission: permission.permission },
+      {
+        owner: params.owner,
+        repo: params.repo,
+        pullNumber: params.pullNumber,
+        commentId: params.commentId,
+        commenterLogin: params.commenterLogin,
+        permission: permission.permission
+      },
       "Ignoring conflict command because commenter does not have write permission."
     );
     await postPermissionDeniedComment(octokit, {
@@ -720,11 +731,18 @@ export async function processConflictComment(
         : "The PR changed or no resolvable conflict remained before push, so no commit was created."
     );
   } catch (error) {
-    logger.error({ error, ...params, commentBody: undefined }, "Manual conflict resolution failed safely.");
+    logger.error({
+      err: error,
+      owner: params.owner,
+      repo: params.repo,
+      pullNumber: params.pullNumber,
+      commentId: params.commentId,
+      commenterLogin: params.commenterLogin
+    }, "Manual conflict resolution failed safely.");
     await postConflictCommandComment(
       octokit,
       params,
-      "goose could not safely resolve and validate the conflicts. No conflict-resolution commit was pushed."
+      describeConflictResolutionFailure(error)
     );
   }
 }

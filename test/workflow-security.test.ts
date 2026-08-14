@@ -7,6 +7,7 @@ test("conflict repair checks out fork heads without persisting GitHub credential
   const caller = await fs.readFile(".github/workflows/review.yml", "utf8");
   assert.match(workflow, /inputs\.auto_resolve_conflicts == 'true'/);
   assert.doesNotMatch(workflow, /pull_head_repository == format\('\{0\}\/\{1\}'/);
+  assert.match(workflow, /fetch-depth:\s*0/);
   assert.doesNotMatch(workflow, /allow-unsafe-pr-checkout:\s*true/);
   assert.match(workflow, /GHBOT_GOOSE_BINARY:\s*\$\{\{ runner\.temp \}\}\/goose\/bin\/goose/);
   assert.match(caller, /pull_head_repository:\s*\$\{\{ github\.event\.pull_request\.head\.repo\.full_name \|\| '' \}\}/);

@@ -305,6 +305,33 @@ export function buildConflictPushArgs(params: {
   ];
 }
 
+export function describeConflictResolutionFailure(error: unknown): string {
+  const message = error instanceof Error ? error.message.toLowerCase() : "";
+  if (message.includes("refusing to merge unrelated histories") || message.includes("shallow")) {
+    return "Conflict repair could not prepare the merge because the PR checkout did not contain enough Git history. No commit was pushed.";
+  }
+  if (
+    message.includes("write access to repository not granted") ||
+    message.includes("permission denied") ||
+    message.includes("authentication failed") ||
+    message.includes("status code: 403")
+  ) {
+    return "GitHub rejected the conflict-resolution push to the contributor fork. Confirm that ‘Allow edits from maintainers’ is still enabled and that the GitHub App can write through that permission. No commit was pushed.";
+  }
+  if (
+    message.includes("force-with-lease") ||
+    message.includes("stale info") ||
+    message.includes("fetch first") ||
+    message.includes("non-fast-forward")
+  ) {
+    return "The contributor branch changed before the resolved commit could be pushed, so the safe force lease rejected the update. Run /conflict again on the latest head. No commit was pushed.";
+  }
+  if (message.includes("final goose confirmation rejected") || message.includes("validation command")) {
+    return "goose produced a candidate resolution, but the configured validation or final safety confirmation rejected it. No commit was pushed.";
+  }
+  return "goose could not safely complete and validate the conflict resolution. The Actions log contains the exact failure stage, and no commit was pushed.";
+}
+
 function isSafeGitHubRepository(value: string): boolean {
   return value.split("/").length === 2 && value.split("/").every((part) => (
     part !== "." && part !== ".." && /^[A-Za-z0-9_.-]+$/.test(part)

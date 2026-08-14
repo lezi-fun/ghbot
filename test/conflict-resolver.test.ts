@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   buildConflictPushArgs,
   canAutoResolveConflicts,
+  describeConflictResolutionFailure,
   diffSnapshotInventories
 } from "../src/review/conflictResolver.js";
 
@@ -30,6 +31,25 @@ test("only a passing conflicted writable current head is eligible", () => {
   }), true);
   assert.equal(canAutoResolveConflicts({ ...eligible, currentHeadSha: "new-head" }), false);
   assert.equal(canAutoResolveConflicts({ ...eligible, enabled: false }), false);
+});
+
+test("conflict failures are actionable without exposing raw command output", () => {
+  assert.match(
+    describeConflictResolutionFailure(new Error("fatal: refusing to merge unrelated histories")),
+    /did not contain enough Git history/
+  );
+  assert.match(
+    describeConflictResolutionFailure(new Error("remote: Write access to repository not granted")),
+    /Allow edits from maintainers/
+  );
+  assert.match(
+    describeConflictResolutionFailure(new Error("rejected: stale info")),
+    /Run \/conflict again/
+  );
+  assert.doesNotMatch(
+    describeConflictResolutionFailure(new Error("secret-token-value")),
+    /secret-token-value/
+  );
 });
 
 test("external fork conflict pushes use a head-SHA force lease", () => {
