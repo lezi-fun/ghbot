@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   buildGooseAgentDockerArgs,
   buildGooseAgentEnvironment,
+  buildIsolatedWorkspaceCommandDockerArgs,
   buildWorkspacePermissionDockerArgs,
   extractGooseFinalText
 } from "../src/ai/gooseCli.js";
@@ -24,6 +25,20 @@ test("goose agent mounts the workflow binary read-only and keeps a visible insta
   assert.match(bootstrap!, /chmod -R a\+rwX \/workspace/);
   assert.doesNotMatch(bootstrap!, /exec goose "\$@"/);
   assert.equal(args.at(-1), "introduce this pull request");
+});
+
+test("isolated validation receives the repository but no model or GitHub credentials", () => {
+  const args = buildIsolatedWorkspaceCommandDockerArgs({
+    containerName: "ghbot-validation-test",
+    realWorkingDirectory: "/tmp/worktree",
+    command: "npm ci && npm test"
+  });
+
+  assert.ok(args.includes("type=bind,source=/tmp/worktree,target=/workspace"));
+  assert.ok(args.includes("HOME=/tmp/ghbot-validation-home"));
+  assert.ok(args.includes("CI=true"));
+  assert.equal(args.at(-1), "npm ci && npm test");
+  assert.equal(args.some((arg) => /OPENAI|GITHUB|GHBOT_GIT_TOKEN/.test(arg)), false);
 });
 
 test("goose agent can fall back to installing inside the container", () => {

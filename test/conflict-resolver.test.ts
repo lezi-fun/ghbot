@@ -6,7 +6,8 @@ import {
   buildConflictReviewDiffArgs,
   canAutoResolveConflicts,
   describeConflictResolutionFailure,
-  diffSnapshotInventories
+  diffSnapshotInventories,
+  parseFinalConfirmation
 } from "../src/review/conflictResolver.js";
 
 const eligible = {
@@ -40,7 +41,7 @@ test("conflict final review scopes the diff to agent-changed files", () => {
     "diff",
     "--cached",
     "--no-ext-diff",
-    "--unified=80",
+    "--unified=24",
     "--",
     "server.js",
     "public/js/app.js"
@@ -122,11 +123,21 @@ test("snapshot inventory detects related file additions, changes, and deletions"
 test("validation repair prompt requires the exact command without allowing test weakening", () => {
   const prompt = buildValidationRepairPrompt({
     testCommand: "npm ci && npm test",
-    summary: "One compatibility test failed.",
-    concerns: ["The handler and its test disagree."]
+    output: "Exit code: 1\nThe handler and its test disagree."
   });
   assert.match(prompt, /npm ci && npm test/);
   assert.match(prompt, /handler and its test disagree/);
   assert.match(prompt, /do not .*weaken\/delete tests/i);
   assert.match(prompt, /related validation failures/i);
+});
+
+test("final confirmation parser accepts a JSON object surrounded by prose", () => {
+  assert.deepEqual(
+    parseFinalConfirmation('Result:\n{"safeToCommit":true,"summary":"validated","concerns":[]}\nDone.'),
+    { safeToCommit: true, summary: "validated", concerns: [] }
+  );
+  assert.throws(
+    () => parseFinalConfirmation("safe to commit"),
+    /required JSON object/
+  );
 });

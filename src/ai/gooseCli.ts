@@ -81,7 +81,8 @@ export async function runGoosePrompt(
 
 export async function runGooseAgent(
   prompt: string,
-  workingDirectory: string
+  workingDirectory: string,
+  options: { timeoutMs?: number } = {}
 ): Promise<string> {
   if (!config.gooseApiKey) {
     throw new Error("GOOSE_API_KEY is required when running a goose agent.");
@@ -112,7 +113,8 @@ export async function runGooseAgent(
       args,
       containerEnv,
       realWorkingDirectory,
-      "goose agent container"
+      "goose agent container",
+      options.timeoutMs
     );
     return extractGooseFinalText(stdout);
   } finally {
@@ -124,6 +126,47 @@ export async function runGooseAgent(
       } finally {
         await proxy.close();
       }
+    }
+  }
+}
+
+export async function runIsolatedWorkspaceCommand(
+  command: string,
+  workingDirectory: string,
+  options: { timeoutMs?: number } = {}
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  const realWorkingDirectory = await fs.realpath(workingDirectory);
+  const containerName = `ghbot-validation-${randomBytes(12).toString("hex")}`;
+  const args = buildIsolatedWorkspaceCommandDockerArgs({
+    containerName,
+    realWorkingDirectory,
+    command
+  });
+
+  try {
+    const stdout = await runProcess(
+      "docker",
+      args,
+      {},
+      realWorkingDirectory,
+      "isolated repository validation",
+      options.timeoutMs
+    );
+    return { code: 0, stdout, stderr: "" };
+  } catch (error) {
+    if (isProcessExitError(error)) {
+      return {
+        code: typeof error.code === "number" ? error.code : 1,
+        stdout: typeof error.stdout === "string" ? error.stdout : "",
+        stderr: typeof error.stderr === "string" ? error.stderr : ""
+      };
+    }
+    throw error;
+  } finally {
+    try {
+      await removeDockerContainer(containerName, realWorkingDirectory);
+    } finally {
+      await restoreAgentWorkspacePermissions(realWorkingDirectory);
     }
   }
 }
@@ -244,6 +287,43 @@ export function buildWorkspacePermissionDockerArgs(realWorkingDirectory: string)
   ];
 }
 
+export function buildIsolatedWorkspaceCommandDockerArgs(params: {
+  containerName: string;
+  realWorkingDirectory: string;
+  command: string;
+}): string[] {
+  return [
+    "run",
+    "--name",
+    params.containerName,
+    "--init",
+    "--user",
+    "root",
+    "--cpus",
+    "2",
+    "--memory",
+    "4g",
+    "--pids-limit",
+    "512",
+    "--security-opt",
+    "no-new-privileges",
+    "--cap-drop",
+    "ALL",
+    "--mount",
+    `type=bind,source=${params.realWorkingDirectory},target=/workspace`,
+    "--workdir",
+    "/workspace",
+    "--env",
+    "HOME=/tmp/ghbot-validation-home",
+    "--env",
+    "CI=true",
+    GOOSE_DOCKER_IMAGE,
+    "sh",
+    "-lc",
+    params.command
+  ];
+}
+
 async function restoreAgentWorkspacePermissions(realWorkingDirectory: string): Promise<void> {
   await runProcess(
     "docker",
@@ -319,7 +399,8 @@ async function runProcess(
   args: string[],
   extraEnv: Record<string, string>,
   workingDirectory: string,
-  label: string
+  label: string,
+  timeoutMs = GOOSE_RUN_TIMEOUT_MS
 ): Promise<string> {
   return new Promise<string>((resolve, reject) => {
     const childEnv = buildChildEnv(extraEnv);
@@ -327,7 +408,7 @@ async function runProcess(
       {
         cmd: command,
         args: redactPrompt(args),
-        timeoutMs: GOOSE_RUN_TIMEOUT_MS
+        timeoutMs
       },
       `Spawning ${label}.`
     );
@@ -348,8 +429,8 @@ async function runProcess(
       finished = true;
       child.kill("SIGTERM");
       setTimeout(() => child.kill("SIGKILL"), 5_000).unref();
-      reject(new Error(`goose timed out after ${GOOSE_RUN_TIMEOUT_MS}ms.`));
-    }, GOOSE_RUN_TIMEOUT_MS);
+      reject(new Error(`${label} timed out after ${timeoutMs}ms.`));
+    }, timeoutMs);
 
     child.stdout.on("data", (chunk: Buffer | string) => {
       stdout += chunk.toString();
@@ -389,6 +470,14 @@ async function runProcess(
       );
     });
   });
+}
+
+function isProcessExitError(error: unknown): error is {
+  code?: number | null;
+  stdout?: string;
+  stderr?: string;
+} {
+  return typeof error === "object" && error !== null && "code" in error;
 }
 
 async function removeDockerContainer(
