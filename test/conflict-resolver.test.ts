@@ -12,7 +12,8 @@ import {
   isValidationInfrastructureFailure,
   parseDiffCheckWhitespaceDiagnostics,
   parseFinalConfirmation,
-  repairDiffCheckContent
+  repairDiffCheckContent,
+  resolveBotCommitIdentity
 } from "../src/review/conflictResolver.js";
 
 const eligible = {
@@ -196,6 +197,31 @@ test("external fork conflict pushes use a head-SHA force lease", () => {
     headBranch: "bad:branch",
     expectedHeadSha: "c".repeat(40)
   }), /Unsafe PR head branch/);
+});
+
+test("conflict commits use the GitHub bot user id for avatar attribution", async () => {
+  const requestedUsernames: string[] = [];
+  const identity = await resolveBotCommitIdentity({
+    rest: {
+      users: {
+        async getByUsername({ username }: { username: string }) {
+          requestedUsernames.push(username);
+          return {
+            data: {
+              id: 316580078,
+              login: "forumlify[bot]"
+            }
+          };
+        }
+      }
+    }
+  } as never, "@forumlify[bot]");
+
+  assert.deepEqual(requestedUsernames, ["forumlify[bot]"]);
+  assert.deepEqual(identity, {
+    name: "forumlify[bot]",
+    email: "316580078+forumlify[bot]@users.noreply.github.com"
+  });
 });
 
 test("snapshot inventory detects related file additions, changes, and deletions", () => {

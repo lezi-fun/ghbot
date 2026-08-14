@@ -136,14 +136,11 @@ export async function resolvePullRequestConflicts(
       return false;
     }
 
-    await runCommand("git", ["config", "user.name", config.botName], worktree, gitEnv);
+    const botCommitIdentity = await resolveBotCommitIdentity(octokit, config.botName);
+    await runCommand("git", ["config", "user.name", botCommitIdentity.name], worktree, gitEnv);
     await runCommand(
       "git",
-      [
-        "config",
-        "user.email",
-        `${config.githubAppId ?? "41898282"}+${config.botName}@users.noreply.github.com`
-      ],
+      ["config", "user.email", botCommitIdentity.email],
       worktree,
       gitEnv
     );
@@ -449,6 +446,26 @@ export async function resolvePullRequestConflicts(
     }
     await fs.rm(askPassDirectory, { recursive: true, force: true });
   }
+}
+
+export async function resolveBotCommitIdentity(
+  octokit: Octokit,
+  configuredBotName: string
+): Promise<{ name: string; email: string }> {
+  const username = configuredBotName.trim().replace(/^@/, "");
+  if (!username) {
+    throw new Error("The configured bot name cannot be used as a GitHub commit identity.");
+  }
+
+  const { data: botUser } = await octokit.rest.users.getByUsername({ username });
+  if (!Number.isSafeInteger(botUser.id) || botUser.id <= 0 || !botUser.login) {
+    throw new Error("GitHub returned an invalid bot user identity for conflict-resolution commits.");
+  }
+
+  return {
+    name: botUser.login,
+    email: `${botUser.id}+${botUser.login}@users.noreply.github.com`
+  };
 }
 
 export function buildConflictPushArgs(params: {
