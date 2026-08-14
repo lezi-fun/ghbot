@@ -46,6 +46,8 @@ goose 的审核结果固定包含四个顶层字段：
 
 新 commit 触发 `synchronize` 后，workflow 会恢复该 PR 最新的缓存。goose 同时收到旧审核结果和当前完整 PR diff，重新验证所有旧问题、移除已经修复的问题，并检查新 commit 引入的回归。旧的合并结论不会在没有新审核的情况下直接复用。
 
+每次 `synchronize` 都会先发布一条绑定当前 commit 的“开始审核”进度评论；审核完成、失败，或因为 PR 再次变化而过期时，会更新同一条评论。新审核成功发布后，ghbot 会删除旧机器人审核中的逐行 `review` 和 `change` 意见，dismiss 仍然生效的旧审核结论，并把旧审核正文压缩为 superseded 占位说明。GitHub 不允许删除已经提交的 review 记录本身，因此最终只有最新审核保留完整正文和有效状态。
+
 PR 标题、描述或 base branch 变化触发 `edited` 时也会重新审核。对象按仓库 ID 和 PR 编号隔离；`latest.json` 用于加速下一次审核，`reviews/<head-sha>.json` 留存每个成功审核过的 head。关闭或合并 PR 不会主动删除这些对象。缓存不保存 API key、完整 diff 或 prompt。
 
 需要同时配置：
@@ -96,6 +98,8 @@ Agent 只能编辑临时快照中的 `.ghbot/repository-knowledge.md` 草稿。g
 - 安装依赖并访问网络
 
 因为它可以执行任意命令，只有具有 `write`、`maintain` 或 `admin` 仓库权限的评论者可以触发。该限制只影响 `@bot` 命令 Agent，不影响外部贡献者的自动 PR 审核。如果外部贡献者需要深入排查，maintainer 可以在对方的 PR 中提到 `@bot`，Agent 会分析该贡献者当前的 PR head，并把回答发布到同一个 conversation。
+
+没有上述权限的用户尝试 `@bot`、`/recheck` 或 `/conflict` 时，机器人会公开回复所需权限并提示联系 maintainer，不再静默失败。回复按源评论 ID 去重，workflow 重跑不会重复发送。
 
 Agent 在一次性 Docker 容器中运行：
 

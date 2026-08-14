@@ -8,6 +8,8 @@ import { processIssueTriage, processPullRequestTriage } from "../triage/processo
 import { deleteLocalReviewCache } from "../review/cache.js";
 import { loadRepositoryKnowledge } from "../repository/knowledge.js";
 import {
+  beginCommitReviewProgress,
+  finishCommitReviewProgress,
   processConflictComment,
   processRecheckComment,
   processPullRequest,
@@ -159,12 +161,29 @@ async function main(): Promise<void> {
       });
     }
 
-    await processPullRequest(
-      octokit,
-      ref,
-      config.reviewStrictness === "strict" ? "strict" : "normal",
-      github.token
-    );
+    const progress = prPayload.action === "synchronize"
+      ? await beginCommitReviewProgress(octokit, ref)
+      : undefined;
+    try {
+      await processPullRequest(
+        octokit,
+        ref,
+        config.reviewStrictness === "strict" ? "strict" : "normal",
+        github.token
+      );
+      if (progress) {
+        await finishCommitReviewProgress(octokit, { ...ref, ...progress });
+      }
+    } catch (error) {
+      if (progress) {
+        await finishCommitReviewProgress(octokit, { ...ref, ...progress, failed: true }).catch(
+          (progressError: unknown) => {
+            logger.warn({ error: progressError, ...ref }, "Failed to publish review failure progress.");
+          }
+        );
+      }
+      throw error;
+    }
     return;
   }
 
@@ -191,6 +210,7 @@ async function main(): Promise<void> {
       owner: commentPayload.repository.owner.login,
       repo: commentPayload.repository.name,
       pullNumber: commentPayload.issue.number,
+      commentId: commentPayload.comment.id,
       commenterLogin: commentPayload.comment.user.login,
       commentBody: commentPayload.comment.body,
       gitToken: github.token
@@ -199,6 +219,7 @@ async function main(): Promise<void> {
       owner: commentPayload.repository.owner.login,
       repo: commentPayload.repository.name,
       pullNumber: commentPayload.issue.number,
+      commentId: commentPayload.comment.id,
       commenterLogin: commentPayload.comment.user.login,
       commentBody: commentPayload.comment.body,
       gitToken: github.token

@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Octokit } from "@octokit/rest";
 import { runGooseAgent } from "../ai/gooseCli.js";
 import { config } from "../config.js";
+import { postPermissionDeniedComment } from "../github/commandFeedback.js";
 import { logger } from "../logger.js";
 import { withRetry } from "../retry.js";
 import { compactFilesForReview } from "../review/prompt.js";
@@ -56,13 +57,13 @@ export async function processPullRequestChat(
     throw error;
   });
   if (!isTrustedChatPermission(permission.permission)) {
-    await withRetry("github.issues.createComment.prChatPermissionDenied", async () => {
-      return octokit.rest.issues.createComment({
-        owner: params.owner,
-        repo: params.repo,
-        issue_number: params.pullNumber,
-        body: `${marker}\n@${params.commenterLogin}, repository-agent replies can run commands, so only collaborators with write, maintain, or admin permission can invoke them.`
-      });
+    await postPermissionDeniedComment(octokit, {
+      owner: params.owner,
+      repo: params.repo,
+      pullNumber: params.pullNumber,
+      sourceCommentId: params.commentId,
+      commenterLogin: params.commenterLogin,
+      command: "@bot"
     });
     return;
   }

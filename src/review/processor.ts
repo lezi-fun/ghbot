@@ -1,6 +1,7 @@
 import type { Octokit } from "@octokit/rest";
 import { config } from "../config.js";
 import { requiredChecksAreGreen } from "../github/checks.js";
+import { postPermissionDeniedComment } from "../github/commandFeedback.js";
 import { collectValidNewLines, toDiffPosition } from "../github/diff.js";
 import { logger } from "../logger.js";
 import { withRetry } from "../retry.js";
@@ -28,6 +29,7 @@ const reviewer = new GooseReviewer();
 const CHECK_RUN_NAME = "ghbot review";
 export const RECHECK_COMMENT_COMMAND = "/recheck";
 export const CONFLICT_COMMENT_COMMAND = "/conflict";
+const REVIEW_PROGRESS_MARKER_PREFIX = "<!-- ghbot-review-progress:v1";
 
 export async function processPullRequest(
   octokit: Octokit,
@@ -318,6 +320,86 @@ export async function shouldReviewPullRequest(
   return isReviewBranchEnabled(pullRequest.base.ref);
 }
 
+export async function beginCommitReviewProgress(
+  octokit: Octokit,
+  params: { owner: string; repo: string; pullNumber: number }
+): Promise<{ commentId: number; headSha: string } | undefined> {
+  const { data: pullRequest } = await octokit.rest.pulls.get({
+    owner: params.owner,
+    repo: params.repo,
+    pull_number: params.pullNumber
+  });
+  if (pullRequest.state !== "open" || pullRequest.draft) {
+    return undefined;
+  }
+
+  const marker = reviewProgressMarker(pullRequest.head.sha);
+  const body = [
+    marker,
+    `New commit \`${shortSha(pullRequest.head.sha)}\` detected. Automated review has started for this commit.`
+  ].join("\n");
+  const existing = await findIssueCommentByMarker(octokit, params, marker);
+  const response = existing
+    ? await withRetry("github.issues.updateComment.reviewProgressStarted", async () => {
+        return octokit.rest.issues.updateComment({
+          owner: params.owner,
+          repo: params.repo,
+          comment_id: existing.id,
+          body
+        });
+      })
+    : await withRetry("github.issues.createComment.reviewProgressStarted", async () => {
+        return octokit.rest.issues.createComment({
+          owner: params.owner,
+          repo: params.repo,
+          issue_number: params.pullNumber,
+          body
+        });
+      });
+
+  return { commentId: response.data.id, headSha: pullRequest.head.sha };
+}
+
+export async function finishCommitReviewProgress(
+  octokit: Octokit,
+  params: {
+    owner: string;
+    repo: string;
+    pullNumber: number;
+    commentId: number;
+    headSha: string;
+    failed?: boolean;
+  }
+): Promise<void> {
+  const marker = reviewProgressMarker(params.headSha);
+  let message: string;
+  if (params.failed) {
+    message = `Automated review could not complete for commit \`${shortSha(params.headSha)}\`. A maintainer can inspect the failed Actions run or comment \`/recheck\` after the problem is corrected.`;
+  } else {
+    const reviews = await octokit.paginate(octokit.rest.pulls.listReviews, {
+      owner: params.owner,
+      repo: params.repo,
+      pull_number: params.pullNumber,
+      per_page: 100
+    });
+    const published = reviews.some(
+      (review) => review.commit_id === params.headSha && Boolean(parseReviewStateMarker(review.body))
+    );
+    message = published
+      ? `Automated review completed for commit \`${shortSha(params.headSha)}\`. The latest review result and \`${CHECK_RUN_NAME}\` check now reflect this commit.`
+      : `The review run ended without publishing a result for commit \`${shortSha(params.headSha)}\`, usually because the PR changed again while it was running. The newest commit will be reviewed separately.`;
+  }
+
+  await withRetry("github.issues.updateComment.reviewProgressFinished", async () => {
+    return octokit.rest.issues.updateComment({
+      owner: params.owner,
+      repo: params.repo,
+      comment_id: params.commentId,
+      body: [marker, message].join("\n")
+    });
+  });
+}
+
 export async function processPullRequestReviewApproval(
   octokit: Octokit,
   params: {
@@ -435,6 +517,7 @@ export async function processRecheckComment(
     owner: string;
     repo: string;
     pullNumber: number;
+    commentId: number;
     commenterLogin: string;
     commentBody: string;
     gitToken?: string;
@@ -483,6 +566,14 @@ export async function processRecheckComment(
       },
       "Ignoring recheck comment because commenter does not have write permission."
     );
+    await postPermissionDeniedComment(octokit, {
+      owner: params.owner,
+      repo: params.repo,
+      pullNumber: params.pullNumber,
+      sourceCommentId: params.commentId,
+      commenterLogin: params.commenterLogin,
+      command: "/recheck"
+    });
     return;
   }
 
@@ -524,6 +615,7 @@ export async function processConflictComment(
     owner: string;
     repo: string;
     pullNumber: number;
+    commentId: number;
     commenterLogin: string;
     commentBody: string;
     gitToken?: string;
@@ -548,6 +640,14 @@ export async function processConflictComment(
       { ...params, commentBody: undefined, permission: permission.permission },
       "Ignoring conflict command because commenter does not have write permission."
     );
+    await postPermissionDeniedComment(octokit, {
+      owner: params.owner,
+      repo: params.repo,
+      pullNumber: params.pullNumber,
+      sourceCommentId: params.commentId,
+      commenterLogin: params.commenterLogin,
+      command: "/conflict"
+    });
     return;
   }
 
@@ -810,6 +910,28 @@ function isNotFoundError(error: unknown): boolean {
   return typeof error === "object" && error !== null && "status" in error && error.status === 404;
 }
 
+function reviewProgressMarker(headSha: string): string {
+  return `${REVIEW_PROGRESS_MARKER_PREFIX} head=${headSha} -->`;
+}
+
+function shortSha(headSha: string): string {
+  return headSha.slice(0, 12);
+}
+
+async function findIssueCommentByMarker(
+  octokit: Octokit,
+  params: { owner: string; repo: string; pullNumber: number },
+  marker: string
+) {
+  const comments = await octokit.paginate(octokit.rest.issues.listComments, {
+    owner: params.owner,
+    repo: params.repo,
+    issue_number: params.pullNumber,
+    per_page: 100
+  });
+  return comments.find((comment) => comment.body?.includes(marker));
+}
+
 async function getLatestBotReviewOutcomeForHead(
   octokit: Octokit,
   params: {
@@ -879,13 +1001,6 @@ async function submitReview(
     mode: ReviewMode;
   }
 ): Promise<void> {
-  await dismissExistingBotReviews(octokit, {
-    owner: params.owner,
-    repo: params.repo,
-    pullNumber: params.pullNumber,
-    commitId: params.commitId
-  });
-
   const validLines = collectValidNewLines(params.files);
   const filesByPath = new Map(params.files.map((file) => [file.filename, file]));
   const unpostedFindings: CategorizedFinding[] = [];
@@ -921,8 +1036,9 @@ async function submitReview(
   const event = disposition.event;
   const body = formatReviewBody(params.decision, unpostedFindings, params.mode, disposition);
 
+  let currentReviewId: number;
   try {
-    await withRetry("github.pulls.createReview", async () => {
+    const response = await withRetry("github.pulls.createReview", async () => {
       return octokit.rest.pulls.createReview({
         owner: params.owner,
         repo: params.repo,
@@ -933,6 +1049,7 @@ async function submitReview(
         comments
       });
     });
+    currentReviewId = response.data.id;
   } catch (error) {
     if (!shouldFallbackToCommentReview(error, event)) {
       throw error;
@@ -949,7 +1066,7 @@ async function submitReview(
       "Falling back to COMMENT review because the current token is not allowed to approve pull requests."
     );
 
-    await withRetry("github.pulls.createReview.commentFallback", async () => {
+    const response = await withRetry("github.pulls.createReview.commentFallback", async () => {
       return octokit.rest.pulls.createReview({
         owner: params.owner,
         repo: params.repo,
@@ -960,7 +1077,16 @@ async function submitReview(
         comments
       });
     });
+    currentReviewId = response.data.id;
   }
+
+  await supersedePreviousBotReviews(octokit, {
+    owner: params.owner,
+    repo: params.repo,
+    pullNumber: params.pullNumber,
+    currentReviewId,
+    currentCommitId: params.commitId
+  });
 }
 
 async function upsertReviewCheckRun(
@@ -1103,13 +1229,14 @@ async function waitForMergeable(
   return data;
 }
 
-async function dismissExistingBotReviews(
+export async function supersedePreviousBotReviews(
   octokit: Octokit,
   params: {
     owner: string;
     repo: string;
     pullNumber: number;
-    commitId: string;
+    currentReviewId: number;
+    currentCommitId: string;
   }
 ): Promise<void> {
   const reviews = await octokit.paginate(octokit.rest.pulls.listReviews, {
@@ -1124,18 +1251,54 @@ async function dismissExistingBotReviews(
       continue;
     }
 
-    if (!review.id || review.state === "DISMISSED") {
+    if (!review.id || review.id === params.currentReviewId) {
       continue;
     }
 
+    const oldCommitId = review.commit_id ?? "unknown";
     try {
-      await octokit.rest.pulls.dismissReview({
+      const comments = await octokit.paginate(octokit.rest.pulls.listCommentsForReview, {
         owner: params.owner,
         repo: params.repo,
         pull_number: params.pullNumber,
         review_id: review.id,
-        message: "Superseded by a newer automated review run."
+        per_page: 100
       });
+      for (const comment of comments) {
+        await withRetry("github.pulls.deleteReviewComment.superseded", async () => {
+          return octokit.rest.pulls.deleteReviewComment({
+            owner: params.owner,
+            repo: params.repo,
+            comment_id: comment.id
+          });
+        });
+      }
+
+      await withRetry("github.pulls.updateReview.superseded", async () => {
+        return octokit.rest.pulls.updateReview({
+          owner: params.owner,
+          repo: params.repo,
+          pull_number: params.pullNumber,
+          review_id: review.id,
+          body: formatSupersededReviewBody({
+            originalMarker: extractReviewStateMarker(review.body),
+            oldCommitId,
+            currentCommitId: params.currentCommitId
+          })
+        });
+      });
+
+      if (review.state !== "DISMISSED") {
+        await withRetry("github.pulls.dismissReview.superseded", async () => {
+          return octokit.rest.pulls.dismissReview({
+            owner: params.owner,
+            repo: params.repo,
+            pull_number: params.pullNumber,
+            review_id: review.id,
+            message: `Superseded by the automated review for commit ${shortSha(params.currentCommitId)}.`
+          });
+        });
+      }
     } catch (error) {
       logger.warn(
         {
@@ -1145,10 +1308,29 @@ async function dismissExistingBotReviews(
           pullNumber: params.pullNumber,
           reviewId: review.id
         },
-        "Failed to dismiss existing bot review."
+        "Failed to fully remove a superseded bot review."
       );
     }
   }
+}
+
+export function formatSupersededReviewBody(params: {
+  originalMarker: string;
+  oldCommitId: string;
+  currentCommitId: string;
+}): string {
+  return [
+    params.originalMarker,
+    "## Superseded automated review",
+    "",
+    `The review for commit \`${shortSha(params.oldCommitId)}\` has been replaced by the automated review for commit \`${shortSha(params.currentCommitId)}\`.`,
+    "",
+    "Its previous inline `review` and `change` comments were removed. Refer to the latest commit review for the current result."
+  ].join("\n");
+}
+
+function extractReviewStateMarker(body: string | null | undefined): string {
+  return body?.match(/<!-- ghbot-review:v1[^>]*-->/)?.[0] ?? "<!-- ghbot-review:v1 superseded=true -->";
 }
 
 function shouldFallbackToCommentReview(error: unknown, event: "APPROVE" | "COMMENT" | "REQUEST_CHANGES"): boolean {

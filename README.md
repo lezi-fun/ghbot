@@ -44,6 +44,8 @@ When Cloudflare R2 is configured, each successful review stores this metadata in
 
 When a new commit triggers `synchronize`, or PR metadata/base changes trigger `edited`, the latest cache for that PR is restored. goose receives an earlier-head result plus the current complete PR patch, revalidates old findings, removes fixed findings, and checks the newest content. The previous merge decision is never reused without a fresh review. An `edited` event on the same head still runs a fresh complete review so title, description, and base-branch changes are respected.
 
+For every `synchronize` event, ghbot posts a commit-scoped progress comment when review starts and updates that same comment when the run completes, fails, or becomes stale because the PR changed again. After the new review is published successfully, ghbot removes inline `review` and `change` comments from earlier bot reviews, dismisses any earlier active bot decision, and reduces its old summary to a superseded marker. GitHub does not allow a submitted review record itself to be deleted, so the newest review is the only full and active automated result.
+
 Objects are isolated by repository ID and PR number. `latest.json` accelerates the next review, while `reviews/<head-sha>.json` preserves each successful head result. Closing or merging a PR does not proactively delete these objects. Cache data contains no API keys, full diff, or prompt.
 
 Configure all of these together:
@@ -87,6 +89,8 @@ Missing configured labels are created automatically.
 ## PR comment chat
 
 Mention `@bot` in a pull request conversation to ask about the current PR. The configured `BOT_NAME` is also accepted as a mention; for example, `BOT_NAME=github-actions[bot]` accepts both `@github-actions` and `@github-actions[bot]`. Because this agent can execute commands, only repository collaborators with `write`, `maintain`, or `admin` permission may invoke it.
+
+When someone without that permission tries `@bot`, `/recheck`, or `/conflict`, ghbot posts a visible reply explaining the required permission and asks them to contact a maintainer. The response is keyed to the source comment so rerunning the workflow does not duplicate it.
 
 This restriction does not affect automatic review. Pull requests from forks and contributors without repository access still receive the normal `review/change/comment/result` review on every configured PR event. When an external contributor needs repository-agent investigation, a maintainer can mention `@bot` on that contributor's PR; the agent then analyzes the contributor's current PR head in isolation and posts the answer to the same conversation.
 
