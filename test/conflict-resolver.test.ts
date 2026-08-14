@@ -47,6 +47,10 @@ test("conflict failures are actionable without exposing raw command output", () 
     /no bot committer identity/
   );
   assert.match(
+    describeConflictResolutionFailure(new Error("git diff --check failed after goose correction")),
+    /automatic correction pass/
+  );
+  assert.match(
     describeConflictResolutionFailure(new Error("rejected: stale info")),
     /Run \/conflict again/
   );
