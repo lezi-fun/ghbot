@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildConflictDiffCheckArgs,
+  buildConflictPrompt,
   buildValidationRepairPrompt,
   buildConflictPushArgs,
   buildConflictReviewDiffArgs,
@@ -84,6 +85,10 @@ test("conflict failures are actionable without exposing raw command output", () 
     /4-minute limit/
   );
   assert.match(
+    describeConflictResolutionFailure(new Error("initial goose conflict-editing pass timed out")),
+    /initial conflict-editing pass.*4-minute limit/i
+  );
+  assert.match(
     describeConflictResolutionFailure(new Error("rejected: stale info")),
     /Run \/conflict again/
   );
@@ -91,6 +96,19 @@ test("conflict failures are actionable without exposing raw command output", () 
     describeConflictResolutionFailure(new Error("secret-token-value")),
     /secret-token-value/
   );
+});
+
+test("initial conflict prompt leaves full validation to the isolated host pass", () => {
+  const validationCommand = "npm ci && npm test";
+  const prompt = buildConflictPrompt(
+    { pullNumber: 15, baseBranch: "Lite", headBranch: "fix/conflicts" },
+    ["server.js"],
+    validationCommand
+  );
+  assert.match(prompt, /separate credential-free container/);
+  assert.match(prompt, /Do not install dependencies or run that full validation command yourself/);
+  assert.match(prompt, /npm ci && npm test/);
+  assert.doesNotMatch(prompt, /Run this exact trusted repository validation command/);
 });
 
 test("diff-check whitespace diagnostics are repaired without another agent run", () => {
