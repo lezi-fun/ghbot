@@ -9,6 +9,7 @@ import {
   canAutoResolveConflicts,
   describeConflictResolutionFailure,
   diffSnapshotInventories,
+  formatValidationLogOutput,
   isValidationInfrastructureFailure,
   parseDiffCheckWhitespaceDiagnostics,
   parseFinalConfirmation,
@@ -99,11 +100,15 @@ test("conflict failures are actionable without exposing raw command output", () 
   );
   assert.match(
     describeConflictResolutionFailure(new Error("validation goose correction timed out")),
-    /focused validation-repair pass.*5-minute limit/i
+    /focused validation-repair pass.*10-minute limit/i
   );
   assert.match(
     describeConflictResolutionFailure(new Error("final goose confirmation timed out")),
     /final read-only safety confirmation.*5-minute limit/i
+  );
+  assert.match(
+    describeConflictResolutionFailure(new Error("Conflict resolution timed out after 2700000ms")),
+    /45-minute total time budget/i
   );
   assert.match(
     describeConflictResolutionFailure(new Error("Validation command failed"), "forumlify bot"),
@@ -116,6 +121,18 @@ test("conflict failures are actionable without exposing raw command output", () 
   assert.doesNotMatch(
     describeConflictResolutionFailure(new Error("secret-token-value")),
     /secret-token-value/
+  );
+});
+
+test("validation failure logs are bounded, readable, and keep the useful tail", () => {
+  assert.equal(formatValidationLogOutput(""), "(empty)");
+  assert.equal(
+    formatValidationLogOutput("\u001b[31mfailed assertion\u001b[0m\r\nexpected true"),
+    "failed assertion\nexpected true"
+  );
+  assert.equal(
+    formatValidationLogOutput("prefix-useful-tail", 11),
+    "[truncated 7 leading characters]\nuseful-tail"
   );
 });
 

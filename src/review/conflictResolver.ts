@@ -32,11 +32,13 @@ const finalConfirmationSchema = z.object({
   concerns: z.array(z.string())
 });
 
-const CONFLICT_TOTAL_TIMEOUT_MS = 25 * 60 * 1000;
+const CONFLICT_TOTAL_TIMEOUT_MS = 45 * 60 * 1000;
 const CONFLICT_INITIAL_AGENT_TIMEOUT_MS = 10 * 60 * 1000;
-const CONFLICT_CORRECTION_AGENT_TIMEOUT_MS = 5 * 60 * 1000;
+const CONFLICT_DIFF_CORRECTION_AGENT_TIMEOUT_MS = 5 * 60 * 1000;
+const CONFLICT_VALIDATION_REPAIR_AGENT_TIMEOUT_MS = 10 * 60 * 1000;
 const CONFLICT_VALIDATION_TIMEOUT_MS = 7 * 60 * 1000;
 const CONFLICT_CONFIRMATION_TIMEOUT_MS = 5 * 60 * 1000;
+const VALIDATION_LOG_OUTPUT_LIMIT = 12_000;
 
 type SnapshotFile = {
   hash: string;
@@ -239,7 +241,10 @@ export async function resolvePullRequestConflicts(
       const previousAgent = afterAgent;
       try {
         await runGooseAgent(buildDiffCheckRepairPrompt(commandFailureOutput(diffCheck)), snapshot, {
-          timeoutMs: remainingConflictTime(resolutionStartedAt, CONFLICT_CORRECTION_AGENT_TIMEOUT_MS)
+          timeoutMs: remainingConflictTime(
+            resolutionStartedAt,
+            CONFLICT_DIFF_CORRECTION_AGENT_TIMEOUT_MS
+          )
         });
       } catch (error) {
         if (error instanceof Error && error.message.toLowerCase().includes("timed out")) {
@@ -293,7 +298,10 @@ export async function resolvePullRequestConflicts(
             testCommand: config.conflictTestCommand,
             output: validationSummary
           }), snapshot, {
-            timeoutMs: remainingConflictTime(resolutionStartedAt, CONFLICT_CORRECTION_AGENT_TIMEOUT_MS)
+            timeoutMs: remainingConflictTime(
+              resolutionStartedAt,
+              CONFLICT_VALIDATION_REPAIR_AGENT_TIMEOUT_MS
+            )
           });
         } catch (error) {
           if (error instanceof Error && error.message.toLowerCase().includes("timed out")) {
@@ -548,7 +556,7 @@ export function describeConflictResolutionFailure(error: unknown, actorName = "g
     return "The isolated repository validation exceeded its 7-minute limit. No commit was pushed.";
   }
   if (message.includes("validation goose correction timed out")) {
-    return "The focused validation-repair pass exceeded its 5-minute limit. No commit was pushed.";
+    return "The focused validation-repair pass exceeded its 10-minute limit. No commit was pushed.";
   }
   if (message.includes("final goose confirmation timed out")) {
     return "The final read-only safety confirmation exceeded its 5-minute limit. No commit was pushed.";
@@ -560,7 +568,7 @@ export function describeConflictResolutionFailure(error: unknown, actorName = "g
     return `${actorName} produced a candidate resolution, but the configured validation or final safety confirmation rejected it. No commit was pushed.`;
   }
   if (message.includes("conflict resolution timed out")) {
-    return "Conflict repair exceeded its 25-minute total time budget and stopped safely. No commit was pushed.";
+    return "Conflict repair exceeded its 45-minute total time budget and stopped safely. No commit was pushed.";
   }
   if (message.includes("initial goose conflict-editing pass timed out")) {
     return "The initial conflict-editing pass exceeded its 10-minute limit. No commit was pushed.";
@@ -1033,7 +1041,35 @@ async function runConflictValidation(
   if (isValidationInfrastructureFailure(result)) {
     throw new Error(`Conflict validation infrastructure failed: ${commandFailureOutput(result)}`);
   }
+  if (result.code !== 0) {
+    logger.warn(
+      {
+        code: result.code,
+        stdoutTail: formatValidationLogOutput(result.stdout),
+        stderrTail: formatValidationLogOutput(result.stderr)
+      },
+      "Isolated repository validation failed; captured output is included for diagnosis."
+    );
+  }
   return result;
+}
+
+export function formatValidationLogOutput(
+  output: string,
+  maxChars = VALIDATION_LOG_OUTPUT_LIMIT
+): string {
+  const normalized = output
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\r\n/g, "\n")
+    .trim();
+  if (!normalized) {
+    return "(empty)";
+  }
+  if (normalized.length <= maxChars) {
+    return normalized;
+  }
+  const omitted = normalized.length - maxChars;
+  return `[truncated ${omitted} leading characters]\n${normalized.slice(-maxChars)}`;
 }
 
 function remainingConflictTime(startedAt: number, perOperationLimitMs: number): number {
