@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildConflictDiffCheckArgs,
   buildValidationRepairPrompt,
   buildConflictPushArgs,
   buildConflictReviewDiffArgs,
   canAutoResolveConflicts,
   describeConflictResolutionFailure,
   diffSnapshotInventories,
-  parseFinalConfirmation
+  parseDiffCheckWhitespaceDiagnostics,
+  parseFinalConfirmation,
+  repairDiffCheckContent
 } from "../src/review/conflictResolver.js";
 
 const eligible = {
@@ -48,6 +51,15 @@ test("conflict final review scopes the diff to agent-changed files", () => {
   ]);
   assert.throws(() => buildConflictReviewDiffArgs([]), /at least one agent-changed file/);
   assert.throws(() => buildConflictReviewDiffArgs([".env"]), /protected path/);
+  assert.deepEqual(buildConflictDiffCheckArgs(["server.js", "public/js/app.js"]), [
+    "diff",
+    "--check",
+    "--cached",
+    "--",
+    "server.js",
+    "public/js/app.js"
+  ]);
+  assert.throws(() => buildConflictDiffCheckArgs([]), /at least one agent-changed file/);
 });
 
 test("conflict failures are actionable without exposing raw command output", () => {
@@ -68,12 +80,34 @@ test("conflict failures are actionable without exposing raw command output", () 
     /automatic correction pass/
   );
   assert.match(
+    describeConflictResolutionFailure(new Error("git diff --check goose correction timed out")),
+    /4-minute limit/
+  );
+  assert.match(
     describeConflictResolutionFailure(new Error("rejected: stale info")),
     /Run \/conflict again/
   );
   assert.doesNotMatch(
     describeConflictResolutionFailure(new Error("secret-token-value")),
     /secret-token-value/
+  );
+});
+
+test("diff-check whitespace diagnostics are repaired without another agent run", () => {
+  const diagnostics = parseDiffCheckWhitespaceDiagnostics([
+    "src/app.js:2: trailing whitespace.",
+    "+const value = true;   ",
+    "src/app.js:3: space before tab in indent.",
+    "+ \treturn value;",
+    "src/app.js:4: leftover conflict marker."
+  ].join("\n"));
+  assert.deepEqual(diagnostics, [
+    { file: "src/app.js", line: 2, kind: "trailing-whitespace" },
+    { file: "src/app.js", line: 3, kind: "space-before-tab" }
+  ]);
+  assert.equal(
+    repairDiffCheckContent("function check() {\nconst value = true;   \n \treturn value;\n}\n", diagnostics),
+    "function check() {\nconst value = true;\n\treturn value;\n}\n"
   );
 });
 

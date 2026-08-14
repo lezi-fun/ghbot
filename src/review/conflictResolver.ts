@@ -41,6 +41,12 @@ type SnapshotFile = {
   size: number;
 };
 
+type DiffCheckWhitespaceDiagnostic = {
+  file: string;
+  line: number;
+  kind: "trailing-whitespace" | "space-before-tab";
+};
+
 export function canAutoResolveConflicts(input: ConflictResolutionEligibility): boolean {
   return (
     input.enabled &&
@@ -187,15 +193,54 @@ export async function resolvePullRequestConflicts(
     }
     let diffCheck = await runCommandAllowFailure(
       "git",
-      ["diff", "--check", "--cached"],
+      buildConflictDiffCheckArgs(agentChanges),
       worktree,
       gitEnv
     );
     if (diffCheck.code !== 0) {
+      const deterministicRepairFiles = await repairDiffCheckWhitespace(
+        snapshot,
+        commandFailureOutput(diffCheck)
+      );
+      if (deterministicRepairFiles.length > 0) {
+        const afterDeterministicRepair = await inventorySnapshot(snapshot);
+        await applySnapshotChanges(
+          snapshot,
+          worktree,
+          deterministicRepairFiles,
+          afterDeterministicRepair
+        );
+        await runCommand("git", ["add", "-A"], worktree, gitEnv);
+        afterAgent = afterDeterministicRepair;
+        agentChanges = diffSnapshotInventories(beforeAgent, afterAgent);
+        diffCheck = await runCommandAllowFailure(
+          "git",
+          buildConflictDiffCheckArgs(agentChanges),
+          worktree,
+          gitEnv
+        );
+        logger.info(
+          {
+            pullNumber: params.pullNumber,
+            files: deterministicRepairFiles,
+            remainingErrors: diffCheck.code !== 0
+          },
+          "Applied deterministic Git diff-check whitespace repairs."
+        );
+      }
+    }
+    if (diffCheck.code !== 0) {
       const previousAgent = afterAgent;
-      await runGooseAgent(buildDiffCheckRepairPrompt(commandFailureOutput(diffCheck)), snapshot, {
-        timeoutMs: remainingConflictTime(resolutionStartedAt, CONFLICT_AGENT_TIMEOUT_MS)
-      });
+      try {
+        await runGooseAgent(buildDiffCheckRepairPrompt(commandFailureOutput(diffCheck)), snapshot, {
+          timeoutMs: remainingConflictTime(resolutionStartedAt, CONFLICT_AGENT_TIMEOUT_MS)
+        });
+      } catch (error) {
+        if (error instanceof Error && error.message.toLowerCase().includes("timed out")) {
+          throw new Error("git diff --check goose correction timed out.", { cause: error });
+        }
+        throw error;
+      }
       afterAgent = await inventorySnapshot(snapshot);
       const correctionChanges = diffSnapshotInventories(previousAgent, afterAgent);
       if (correctionChanges.length === 0) {
@@ -214,9 +259,10 @@ export async function resolvePullRequestConflicts(
           `goose reintroduced unresolved conflicts while correcting diff issues: ${remainingAfterCorrection.join(", ")}`
         );
       }
+      agentChanges = diffSnapshotInventories(beforeAgent, afterAgent);
       diffCheck = await runCommandAllowFailure(
         "git",
-        ["diff", "--check", "--cached"],
+        buildConflictDiffCheckArgs(agentChanges),
         worktree,
         gitEnv
       );
@@ -260,9 +306,10 @@ export async function resolvePullRequestConflicts(
             `goose reintroduced unresolved conflicts while correcting validation failures: ${remainingAfterValidationRepair.join(", ")}`
           );
         }
+        agentChanges = diffSnapshotInventories(beforeAgent, afterAgent);
         const repairedDiffCheck = await runCommandAllowFailure(
           "git",
-          ["diff", "--check", "--cached"],
+          buildConflictDiffCheckArgs(agentChanges),
           worktree,
           gitEnv
         );
@@ -271,8 +318,6 @@ export async function resolvePullRequestConflicts(
             `git diff --check failed after goose validation correction: ${commandFailureOutput(repairedDiffCheck)}`
           );
         }
-
-        agentChanges = diffSnapshotInventories(beforeAgent, afterAgent);
         validation = await runIsolatedWorkspaceCommand(
           config.conflictTestCommand,
           snapshot,
@@ -421,6 +466,16 @@ export function buildConflictReviewDiffArgs(changedFiles: string[]): string[] {
   return ["diff", "--cached", "--no-ext-diff", "--unified=24", "--", ...changedFiles];
 }
 
+export function buildConflictDiffCheckArgs(changedFiles: string[]): string[] {
+  if (changedFiles.length === 0) {
+    throw new Error("Conflict diff check requires at least one agent-changed file.");
+  }
+  for (const file of changedFiles) {
+    validateAgentChangePath(file);
+  }
+  return ["diff", "--check", "--cached", "--", ...changedFiles];
+}
+
 export function describeConflictResolutionFailure(error: unknown): string {
   const message = error instanceof Error ? error.message.toLowerCase() : "";
   if (message.includes("refusing to merge unrelated histories") || message.includes("shallow")) {
@@ -450,6 +505,9 @@ export function describeConflictResolutionFailure(error: unknown): string {
   }
   if (message.includes("conflict resolution timed out")) {
     return "Conflict repair exceeded its 12-minute total time budget and stopped safely. No commit was pushed.";
+  }
+  if (message.includes("git diff --check goose correction timed out")) {
+    return "The whitespace or conflict-marker correction pass exceeded its 4-minute limit. No commit was pushed.";
   }
   if (message.includes("git diff --check failed")) {
     return "The candidate resolution still contained Git whitespace or conflict-marker errors after one automatic correction pass. No commit was pushed.";
@@ -531,6 +589,81 @@ function buildDiffCheckRepairPrompt(checkOutput: string): string {
     "Host git diff --check diagnostics:",
     checkOutput.slice(0, 12_000)
   ].join("\n");
+}
+
+export function parseDiffCheckWhitespaceDiagnostics(
+  output: string
+): DiffCheckWhitespaceDiagnostic[] {
+  const diagnostics: DiffCheckWhitespaceDiagnostic[] = [];
+  for (const line of output.split(/\r?\n/)) {
+    const match = /^(.*):(\d+): (trailing whitespace|space before tab in indent)\.$/.exec(line);
+    if (!match) {
+      continue;
+    }
+    const [, file, lineNumber, message] = match;
+    if (!file || file.startsWith('"') || !lineNumber) {
+      continue;
+    }
+    diagnostics.push({
+      file,
+      line: Number(lineNumber),
+      kind: message === "trailing whitespace" ? "trailing-whitespace" : "space-before-tab"
+    });
+  }
+  return diagnostics;
+}
+
+export function repairDiffCheckContent(
+  content: string,
+  diagnostics: DiffCheckWhitespaceDiagnostic[]
+): string {
+  const lines = content.split("\n");
+  for (const diagnostic of diagnostics) {
+    const index = diagnostic.line - 1;
+    const line = lines[index];
+    if (line === undefined) {
+      continue;
+    }
+    if (diagnostic.kind === "trailing-whitespace") {
+      lines[index] = line.replace(/[ \t]+(?=\r?$)/, "");
+      continue;
+    }
+    const indentation = /^[ \t]*/.exec(line)?.[0] ?? "";
+    const repairedIndentation = indentation.replace(/ +(?=\t)/g, "");
+    lines[index] = repairedIndentation + line.slice(indentation.length);
+  }
+  return lines.join("\n");
+}
+
+async function repairDiffCheckWhitespace(snapshot: string, output: string): Promise<string[]> {
+  const byFile = new Map<string, DiffCheckWhitespaceDiagnostic[]>();
+  for (const diagnostic of parseDiffCheckWhitespaceDiagnostics(output)) {
+    validateAgentChangePath(diagnostic.file);
+    const fileDiagnostics = byFile.get(diagnostic.file) ?? [];
+    fileDiagnostics.push(diagnostic);
+    byFile.set(diagnostic.file, fileDiagnostics);
+  }
+
+  const changedFiles: string[] = [];
+  for (const [relativePath, diagnostics] of byFile) {
+    const absolutePath = safeFilePath(snapshot, relativePath);
+    const content = await fs.readFile(absolutePath, "utf8").catch((error: unknown) => {
+      if (isFileNotFoundError(error)) {
+        return undefined;
+      }
+      throw error;
+    });
+    if (content === undefined) {
+      continue;
+    }
+    const repaired = repairDiffCheckContent(content, diagnostics);
+    if (repaired === content) {
+      continue;
+    }
+    await fs.writeFile(absolutePath, repaired);
+    changedFiles.push(relativePath);
+  }
+  return changedFiles.sort();
 }
 
 async function confirmFinalResolution(input: {
