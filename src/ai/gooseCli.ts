@@ -12,10 +12,13 @@ const GOOSE_RUN_TIMEOUT_MS = 10 * 60 * 1000;
 const GOOSE_DOCKER_IMAGE = "node:24-bookworm";
 const GOOSE_DOCKER_VERSION = "v1.46.0";
 const GOOSE_CONTAINER_PATH = "/usr/local/bin/goose";
+const ISOLATED_VALIDATION_WORKSPACE = "/tmp/ghbot-validation-workspace";
 const GOOSE_CONTAINER_BOOTSTRAP = [
   "set -eu",
   "cleanup_workspace() { chmod -R a+rwX /workspace 2>/dev/null || true; }",
   "trap cleanup_workspace EXIT",
+  'mkdir -p "$HOME"',
+  'git config --global --add safe.directory /workspace',
   "if ! command -v goose >/dev/null 2>&1; then",
   "  curl -fsSL https://github.com/aaif-goose/goose/releases/download/stable/download_cli.sh -o /tmp/download_cli.sh",
   `  if ! GOOSE_VERSION="${GOOSE_DOCKER_VERSION}" GOOSE_BIN_DIR=/tmp/goose-bin CONFIGURE=false bash /tmp/download_cli.sh >/tmp/goose-install.log 2>&1; then`,
@@ -30,11 +33,23 @@ const GOOSE_WORKSPACE_PERMISSION_SCRIPT = [
   "set -eu",
   "find /workspace \\( -type d -o -type f \\) -uid 0 -exec chmod a+rwX {} +"
 ].join("\n");
+const ISOLATED_VALIDATION_BOOTSTRAP = [
+  "set -eu",
+  'mkdir -p "$HOME"',
+  `validation_workspace="${ISOLATED_VALIDATION_WORKSPACE}"`,
+  'mkdir -p "$validation_workspace"',
+  'cp -R --no-preserve=ownership /workspace/. "$validation_workspace/"',
+  'chmod -R u+rwX "$validation_workspace"',
+  'cd "$validation_workspace"',
+  'git config --global --add safe.directory "$validation_workspace"',
+  'exec sh -lc "$1"'
+].join("\n");
 
 export async function runGoosePrompt(
   prompt: string,
   options: {
     workingDirectory?: string;
+    timeoutMs?: number;
   } = {}
 ): Promise<string> {
   if (!config.gooseApiKey) {
@@ -72,7 +87,12 @@ export async function runGoosePrompt(
   );
 
   try {
-    const stdout = await runGoose(args, buildGooseEnv(tempDir), workingDirectory);
+    const stdout = await runGoose(
+      args,
+      buildGooseEnv(tempDir),
+      workingDirectory,
+      options.timeoutMs
+    );
     return extractGooseFinalText(stdout);
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true });
@@ -163,11 +183,7 @@ export async function runIsolatedWorkspaceCommand(
     }
     throw error;
   } finally {
-    try {
-      await removeDockerContainer(containerName, realWorkingDirectory);
-    } finally {
-      await restoreAgentWorkspacePermissions(realWorkingDirectory);
-    }
+    await removeDockerContainer(containerName, realWorkingDirectory);
   }
 }
 
@@ -310,7 +326,7 @@ export function buildIsolatedWorkspaceCommandDockerArgs(params: {
     "--cap-drop",
     "ALL",
     "--mount",
-    `type=bind,source=${params.realWorkingDirectory},target=/workspace`,
+    `type=bind,source=${params.realWorkingDirectory},target=/workspace,readonly`,
     "--workdir",
     "/workspace",
     "--env",
@@ -320,6 +336,8 @@ export function buildIsolatedWorkspaceCommandDockerArgs(params: {
     GOOSE_DOCKER_IMAGE,
     "sh",
     "-lc",
+    ISOLATED_VALIDATION_BOOTSTRAP,
+    "ghbot-validation",
     params.command
   ];
 }
@@ -389,9 +407,10 @@ function normalizeBaseUrl(value: string | undefined): string {
 async function runGoose(
   args: string[],
   extraEnv: Record<string, string>,
-  workingDirectory: string
+  workingDirectory: string,
+  timeoutMs?: number
 ): Promise<string> {
-  return runProcess("goose", args, extraEnv, workingDirectory, "goose process");
+  return runProcess("goose", args, extraEnv, workingDirectory, "goose process", timeoutMs);
 }
 
 async function runProcess(
@@ -407,7 +426,7 @@ async function runProcess(
     logger.info(
       {
         cmd: command,
-        args: redactPrompt(args),
+        args: redactProcessArgs(args, label),
         timeoutMs
       },
       `Spawning ${label}.`
@@ -429,7 +448,10 @@ async function runProcess(
       finished = true;
       child.kill("SIGTERM");
       setTimeout(() => child.kill("SIGKILL"), 5_000).unref();
-      reject(new Error(`${label} timed out after ${timeoutMs}ms.`));
+      reject(Object.assign(
+        new Error(`${label} timed out after ${timeoutMs}ms.`),
+        { stdout, stderr }
+      ));
     }, timeoutMs);
 
     child.stdout.on("data", (chunk: Buffer | string) => {
@@ -438,7 +460,7 @@ async function runProcess(
     child.stderr.on("data", (chunk: Buffer | string) => {
       const text = chunk.toString();
       stderr += text;
-      streamStderr(text);
+      streamStderr(text, label);
     });
     child.on("error", (error) => {
       if (finished) {
@@ -464,7 +486,7 @@ async function runProcess(
 
       reject(
         Object.assign(
-          new Error(`goose exited with code ${code ?? "null"} and signal ${signal ?? "null"}.`),
+          new Error(`${label} exited with code ${code ?? "null"} and signal ${signal ?? "null"}.`),
           { code, signal, stdout, stderr }
         )
       );
@@ -587,16 +609,29 @@ function stripMarkdownFence(value: string): string {
 }
 
 function redactPrompt(args: string[]): string[] {
-  const promptIndex = args.indexOf("--text") + 1;
+  const textIndex = args.indexOf("--text");
+  if (textIndex < 0) {
+    return [...args];
+  }
+  const promptIndex = textIndex + 1;
   return args.map((arg, index) =>
     index === promptIndex ? `[goose prompt: ${arg.length} chars]` : arg
   );
 }
 
-function streamStderr(text: string): void {
+export function redactProcessArgs(args: string[], label: string): string[] {
+  const redacted = redactPrompt(args);
+  if (label === "isolated repository validation" && redacted.length > 0) {
+    const commandIndex = redacted.length - 1;
+    redacted[commandIndex] = `[validation command: ${args[commandIndex]?.length ?? 0} chars]`;
+  }
+  return redacted;
+}
+
+function streamStderr(text: string, label: string): void {
   for (const line of text.replace(/\r\n/g, "\n").split("\n")) {
     if (line.trim()) {
-      process.stderr.write(`[goose stderr] ${line}\n`);
+      process.stderr.write(`[${label} stderr] ${line}\n`);
     }
   }
 }

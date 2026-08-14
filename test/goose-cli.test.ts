@@ -5,7 +5,8 @@ import {
   buildGooseAgentEnvironment,
   buildIsolatedWorkspaceCommandDockerArgs,
   buildWorkspacePermissionDockerArgs,
-  extractGooseFinalText
+  extractGooseFinalText,
+  redactProcessArgs
 } from "../src/ai/gooseCli.js";
 
 test("goose agent mounts the workflow binary read-only and keeps a visible install fallback", () => {
@@ -22,6 +23,7 @@ test("goose agent mounts the workflow binary read-only and keeps a visible insta
   assert.match(bootstrap!, /command -v goose/);
   assert.match(bootstrap!, /cat \/tmp\/goose-install\.log >&2/);
   assert.match(bootstrap!, /trap cleanup_workspace EXIT/);
+  assert.match(bootstrap!, /safe\.directory \/workspace/);
   assert.match(bootstrap!, /chmod -R a\+rwX \/workspace/);
   assert.doesNotMatch(bootstrap!, /exec goose "\$@"/);
   assert.equal(args.at(-1), "introduce this pull request");
@@ -34,11 +36,28 @@ test("isolated validation receives the repository but no model or GitHub credent
     command: "npm ci && npm test"
   });
 
-  assert.ok(args.includes("type=bind,source=/tmp/worktree,target=/workspace"));
+  assert.ok(args.includes("type=bind,source=/tmp/worktree,target=/workspace,readonly"));
   assert.ok(args.includes("HOME=/tmp/ghbot-validation-home"));
   assert.ok(args.includes("CI=true"));
+  const bootstrap = args[args.indexOf("-lc") + 1];
+  assert.match(bootstrap!, /cp -R --no-preserve=ownership/);
+  assert.match(bootstrap!, /safe\.directory "\$validation_workspace"/);
+  assert.match(bootstrap!, /exec sh -lc "\$1"/);
+  assert.equal(args.at(-2), "ghbot-validation");
   assert.equal(args.at(-1), "npm ci && npm test");
   assert.equal(args.some((arg) => /OPENAI|GITHUB|GHBOT_GIT_TOKEN/.test(arg)), false);
+});
+
+test("process logging redacts only prompts and trusted validation commands", () => {
+  assert.deepEqual(redactProcessArgs(["run", "--rm"], "workspace cleanup"), ["run", "--rm"]);
+  assert.deepEqual(
+    redactProcessArgs(["run", "--text", "secret prompt"], "goose agent container"),
+    ["run", "--text", "[goose prompt: 13 chars]"]
+  );
+  assert.deepEqual(
+    redactProcessArgs(["run", "sh", "-lc", "npm ci && npm test"], "isolated repository validation"),
+    ["run", "sh", "-lc", "[validation command: 18 chars]"]
+  );
 });
 
 test("goose agent can fall back to installing inside the container", () => {

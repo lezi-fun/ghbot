@@ -9,6 +9,7 @@ import {
   canAutoResolveConflicts,
   describeConflictResolutionFailure,
   diffSnapshotInventories,
+  isValidationInfrastructureFailure,
   parseDiffCheckWhitespaceDiagnostics,
   parseFinalConfirmation,
   repairDiffCheckContent
@@ -89,6 +90,25 @@ test("conflict failures are actionable without exposing raw command output", () 
     /initial conflict-editing pass.*10-minute limit/i
   );
   assert.match(
+    describeConflictResolutionFailure(
+      new Error("Conflict validation infrastructure failed: dubious ownership"),
+      "forumlify bot"
+    ),
+    /validation environment failed.*No code-repair pass/i
+  );
+  assert.match(
+    describeConflictResolutionFailure(new Error("validation goose correction timed out")),
+    /focused validation-repair pass.*5-minute limit/i
+  );
+  assert.match(
+    describeConflictResolutionFailure(new Error("final goose confirmation timed out")),
+    /final read-only safety confirmation.*5-minute limit/i
+  );
+  assert.match(
+    describeConflictResolutionFailure(new Error("Validation command failed"), "forumlify bot"),
+    /^forumlify bot produced/
+  );
+  assert.match(
     describeConflictResolutionFailure(new Error("rejected: stale info")),
     /Run \/conflict again/
   );
@@ -96,6 +116,29 @@ test("conflict failures are actionable without exposing raw command output", () 
     describeConflictResolutionFailure(new Error("secret-token-value")),
     /secret-token-value/
   );
+});
+
+test("validation infrastructure failures are not sent to the code-repair agent", () => {
+  assert.equal(isValidationInfrastructureFailure({
+    code: 1,
+    stdout: "",
+    stderr: "fatal: detected dubious ownership in repository at '/workspace'"
+  }), true);
+  assert.equal(isValidationInfrastructureFailure({
+    code: 125,
+    stdout: "",
+    stderr: "docker failed before the command started"
+  }), true);
+  assert.equal(isValidationInfrastructureFailure({
+    code: 1,
+    stdout: "",
+    stderr: "permission denied while trying to connect to the Docker API at unix:///docker.sock"
+  }), true);
+  assert.equal(isValidationInfrastructureFailure({
+    code: 1,
+    stdout: "AssertionError: expected 2 but received 1",
+    stderr: ""
+  }), false);
 });
 
 test("initial conflict prompt leaves full validation to the isolated host pass", () => {
@@ -172,7 +215,7 @@ test("snapshot inventory detects related file additions, changes, and deletions"
   );
 });
 
-test("validation repair prompt requires the exact command without allowing test weakening", () => {
+test("validation repair prompt leaves the authoritative rerun to the isolated host", () => {
   const prompt = buildValidationRepairPrompt({
     testCommand: "npm ci && npm test",
     output: "Exit code: 1\nThe handler and its test disagree."
@@ -181,6 +224,8 @@ test("validation repair prompt requires the exact command without allowing test 
   assert.match(prompt, /handler and its test disagree/);
   assert.match(prompt, /do not .*weaken\/delete tests/i);
   assert.match(prompt, /related validation failures/i);
+  assert.match(prompt, /host will rerun this exact trusted repository validation command/i);
+  assert.match(prompt, /Do not install dependencies or run the full validation command yourself/i);
 });
 
 test("final confirmation parser accepts a JSON object surrounded by prose", () => {

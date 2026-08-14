@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { Octokit } from "@octokit/rest";
 import { z } from "zod";
-import { runGooseAgent, runIsolatedWorkspaceCommand } from "../ai/gooseCli.js";
+import { runGooseAgent, runGoosePrompt, runIsolatedWorkspaceCommand } from "../ai/gooseCli.js";
 import { createRepositorySnapshot } from "../chat/processor.js";
 import { config } from "../config.js";
 import { logger } from "../logger.js";
@@ -283,20 +283,27 @@ export async function resolvePullRequestConflicts(
 
     let validationSummary: string | undefined;
     if (config.conflictTestCommand) {
-      let validation = await runIsolatedWorkspaceCommand(
+      let validation = await runConflictValidation(
         config.conflictTestCommand,
         snapshot,
-        { timeoutMs: remainingConflictTime(resolutionStartedAt, CONFLICT_VALIDATION_TIMEOUT_MS) }
+        resolutionStartedAt
       );
       validationSummary = formatValidationResult(config.conflictTestCommand, validation);
       if (validation.code !== 0) {
         const previousAgent = afterAgent;
-        await runGooseAgent(buildValidationRepairPrompt({
-          testCommand: config.conflictTestCommand,
-          output: validationSummary
-        }), snapshot, {
-          timeoutMs: remainingConflictTime(resolutionStartedAt, CONFLICT_CORRECTION_AGENT_TIMEOUT_MS)
-        });
+        try {
+          await runGooseAgent(buildValidationRepairPrompt({
+            testCommand: config.conflictTestCommand,
+            output: validationSummary
+          }), snapshot, {
+            timeoutMs: remainingConflictTime(resolutionStartedAt, CONFLICT_CORRECTION_AGENT_TIMEOUT_MS)
+          });
+        } catch (error) {
+          if (error instanceof Error && error.message.toLowerCase().includes("timed out")) {
+            throw new Error("validation goose correction timed out.", { cause: error });
+          }
+          throw error;
+        }
         afterAgent = await inventorySnapshot(snapshot);
         const validationRepairChanges = diffSnapshotInventories(previousAgent, afterAgent);
         if (validationRepairChanges.length === 0) {
@@ -327,10 +334,10 @@ export async function resolvePullRequestConflicts(
             `git diff --check failed after goose validation correction: ${commandFailureOutput(repairedDiffCheck)}`
           );
         }
-        validation = await runIsolatedWorkspaceCommand(
+        validation = await runConflictValidation(
           config.conflictTestCommand,
           snapshot,
-          { timeoutMs: remainingConflictTime(resolutionStartedAt, CONFLICT_VALIDATION_TIMEOUT_MS) }
+          resolutionStartedAt
         );
         validationSummary = formatValidationResult(config.conflictTestCommand, validation);
         if (validation.code !== 0) {
@@ -352,17 +359,25 @@ export async function resolvePullRequestConflicts(
     }
     const finalStatus = await runCommand("git", ["status", "--short"], worktree, gitEnv);
     const beforeConfirmation = await inventorySnapshot(snapshot);
-    const confirmation = await confirmFinalResolution({
-      pullNumber: params.pullNumber,
-      baseBranch: params.baseBranch,
-      headBranch: params.headBranch,
-      conflictFiles,
-      changedFiles: agentChanges,
-      status: finalStatus,
-      diff: finalDiff,
-      repositoryKnowledge: knowledge,
-      validationSummary
-    }, snapshot, remainingConflictTime(resolutionStartedAt, CONFLICT_CONFIRMATION_TIMEOUT_MS));
+    let confirmation;
+    try {
+      confirmation = await confirmFinalResolution({
+        pullNumber: params.pullNumber,
+        baseBranch: params.baseBranch,
+        headBranch: params.headBranch,
+        conflictFiles,
+        changedFiles: agentChanges,
+        status: finalStatus,
+        diff: finalDiff,
+        repositoryKnowledge: knowledge,
+        validationSummary
+      }, remainingConflictTime(resolutionStartedAt, CONFLICT_CONFIRMATION_TIMEOUT_MS));
+    } catch (error) {
+      if (error instanceof Error && error.message.toLowerCase().includes("timed out")) {
+        throw new Error("final goose confirmation timed out.", { cause: error });
+      }
+      throw error;
+    }
     const afterConfirmation = await inventorySnapshot(snapshot);
     if (diffSnapshotInventories(beforeConfirmation, afterConfirmation).length > 0) {
       throw new Error("Final goose confirmation modified the workspace during its read-only pass.");
@@ -485,7 +500,7 @@ export function buildConflictDiffCheckArgs(changedFiles: string[]): string[] {
   return ["diff", "--check", "--cached", "--", ...changedFiles];
 }
 
-export function describeConflictResolutionFailure(error: unknown): string {
+export function describeConflictResolutionFailure(error: unknown, actorName = "goose"): string {
   const message = error instanceof Error ? error.message.toLowerCase() : "";
   if (message.includes("refusing to merge unrelated histories") || message.includes("shallow")) {
     return "Conflict repair could not prepare the merge because the PR checkout did not contain enough Git history. No commit was pushed.";
@@ -509,8 +524,23 @@ export function describeConflictResolutionFailure(error: unknown): string {
   ) {
     return "The contributor branch changed before the resolved commit could be pushed, so the safe force lease rejected the update. Run /conflict again on the latest head. No commit was pushed.";
   }
+  if (message.includes("conflict validation infrastructure failed")) {
+    return "The isolated validation environment failed before repository checks could complete. No code-repair pass was attempted and no commit was pushed.";
+  }
+  if (message.includes("isolated conflict validation timed out")) {
+    return "The isolated repository validation exceeded its 7-minute limit. No commit was pushed.";
+  }
+  if (message.includes("validation goose correction timed out")) {
+    return "The focused validation-repair pass exceeded its 5-minute limit. No commit was pushed.";
+  }
+  if (message.includes("final goose confirmation timed out")) {
+    return "The final read-only safety confirmation exceeded its 5-minute limit. No commit was pushed.";
+  }
+  if (message.includes("final goose confirmation did not return")) {
+    return "The final read-only safety confirmation returned an invalid result. No commit was pushed.";
+  }
   if (message.includes("final goose confirmation rejected") || message.includes("validation command")) {
-    return "goose produced a candidate resolution, but the configured validation or final safety confirmation rejected it. No commit was pushed.";
+    return `${actorName} produced a candidate resolution, but the configured validation or final safety confirmation rejected it. No commit was pushed.`;
   }
   if (message.includes("conflict resolution timed out")) {
     return "Conflict repair exceeded its 25-minute total time budget and stopped safely. No commit was pushed.";
@@ -527,7 +557,7 @@ export function describeConflictResolutionFailure(error: unknown): string {
   if (message.includes("resolved staged diff contains")) {
     return "The AI-touched conflict-resolution diff exceeded the configured patch-size limit, so final confirmation was not attempted. No commit was pushed.";
   }
-  return "goose could not safely complete and validate the conflict resolution. The Actions log contains the exact failure stage, and no commit was pushed.";
+  return `${actorName} could not safely complete and validate the conflict resolution. The Actions log contains the exact failure stage, and no commit was pushed.`;
 }
 
 function isSafeGitHubRepository(value: string): boolean {
@@ -587,7 +617,8 @@ export function buildValidationRepairPrompt(input: {
   return [
     "Correct the current conflict-resolution workspace using the final safety review below.",
     "Fix only merge-related validation failures, compatibility problems, callers, tests, generated lockfiles, configuration, or documentation needed to make the merged result coherent. Preserve the pull request intent and the target branch behavior; do not add unrelated features or refactors.",
-    `Run this exact trusted repository validation command after editing and keep correcting the relevant files until it passes: ${input.testCommand}`,
+    `After this focused edit pass, the host will rerun this exact trusted repository validation command in a fresh isolated copy: ${input.testCommand}`,
+    "Do not install dependencies or run the full validation command yourself. Use the supplied failure output to make only the directly relevant corrections; the host owns the authoritative rerun.",
     "Do not commit, push, change Git configuration, modify repository knowledge, or weaken/delete tests merely to hide a real regression.",
     "Trusted isolated validation result:",
     input.output.slice(0, 20_000),
@@ -690,8 +721,8 @@ async function confirmFinalResolution(input: {
   diff: string;
   repositoryKnowledge: string;
   validationSummary?: string;
-}, snapshot: string, timeoutMs: number) {
-  const raw = await runGooseAgent([
+}, timeoutMs: number) {
+  const raw = await runGoosePrompt([
     "You are the final safety reviewer for an automated Git conflict resolution.",
     "This is a read-only confirmation pass. Do not edit, add, delete, format, install dependencies, or rerun tests.",
     "Review the staged diff below. Confirm only when the merge conflict is correctly resolved, related compatibility edits are coherent, no unrelated or suspicious changes are present, and committing this exact result is safe.",
@@ -723,7 +754,7 @@ async function confirmFinalResolution(input: {
     "",
     "Complete staged diff:",
     input.diff
-  ].join("\n"), snapshot, { timeoutMs });
+  ].join("\n"), { timeoutMs });
   return parseFinalConfirmation(raw);
 }
 
@@ -923,6 +954,69 @@ function formatValidationResult(
     "Output:",
     output
   ].join("\n");
+}
+
+export function isValidationInfrastructureFailure(result: {
+  code: number;
+  stdout: string;
+  stderr: string;
+}): boolean {
+  if ([125, 137, 143].includes(result.code)) {
+    return true;
+  }
+  const output = [result.stderr, result.stdout].join("\n").toLowerCase();
+  return [
+    "detected dubious ownership",
+    "cannot connect to the docker daemon",
+    "permission denied while trying to connect to the docker api",
+    "permission denied while trying to connect to the docker daemon socket",
+    "docker.sock: connect: permission denied",
+    "error response from daemon",
+    "oci runtime",
+    "no space left on device",
+    "temporary failure in name resolution",
+    "network is unreachable",
+    "getaddrinfo eai_again",
+    "npm error code eai_again",
+    "npm err! code eai_again",
+    "npm error code enetwork",
+    "npm err! code enetwork",
+    "npm error code econnreset",
+    "npm err! code econnreset",
+    "npm error code etimedout",
+    "npm err! code etimedout",
+    "npm error code e401",
+    "npm err! code e401",
+    "npm error code e403",
+    "npm err! code e403",
+    "unable to get local issuer certificate",
+    "self-signed certificate",
+    "certificate has expired",
+    "pull access denied",
+    "toomanyrequests"
+  ].some((pattern) => output.includes(pattern));
+}
+
+async function runConflictValidation(
+  command: string,
+  snapshot: string,
+  resolutionStartedAt: number
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  let result: { code: number; stdout: string; stderr: string };
+  try {
+    result = await runIsolatedWorkspaceCommand(command, snapshot, {
+      timeoutMs: remainingConflictTime(resolutionStartedAt, CONFLICT_VALIDATION_TIMEOUT_MS)
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message.toLowerCase().includes("timed out")) {
+      throw new Error("isolated conflict validation timed out.", { cause: error });
+    }
+    throw error;
+  }
+  if (isValidationInfrastructureFailure(result)) {
+    throw new Error(`Conflict validation infrastructure failed: ${commandFailureOutput(result)}`);
+  }
+  return result;
 }
 
 function remainingConflictTime(startedAt: number, perOperationLimitMs: number): number {

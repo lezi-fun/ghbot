@@ -128,7 +128,7 @@ prompt 还会收到由宿主通过 GitHub 验证的请求者上下文：评论�
 
 自动冲突修复仅处理当前 head 未变化的同仓库 PR。外部 fork 的 `pull_request_target` 仍保持纯 GitHub API 审核，不 checkout 贡献者代码；贡献者启用 **Allow edits from maintainers** 后，maintainer 可以显式评论 `/conflict`，由可信的评论 workflow checkout PR head，并使用绑定已审核 head SHA 的 `--force-with-lease` 推送，因此贡献者新提交的 commit 不会被覆盖。旧 head、非冲突状态、关闭 maintainer edits 和未通过审核的 PR 都会跳过。ghbot 在宿主生成本地 merge，再把无 `.git`、无凭据的净化快照交给 goose。goose 可以修改直接冲突文件，也可以在兼容性确有需要时调整相关调用方、类型、测试、lockfile、配置或文档；受保护的 Agent 配置和凭证路径会被拒绝。
 
-应用改动后，ghbot 检查未合并路径和 `git diff --check`。第二次隔离 goose 会审核完整 staged diff，并在配置后运行可信的 `CONFLICT_TEST_COMMAND`。只有第二次确认明确返回 `safeToCommit=true`，且远端 PR head 仍与审核 SHA 相同，才会创建普通 merge commit 并 push；绝不 force-push。新 commit 会触发 `synchronize` 并重新完整审核，不会把修复前的结论直接当作批准。
+应用改动后，ghbot 检查未合并路径，并且只对 AI 修改过的文件运行 `git diff --check`。配置验证命令后，无凭据容器会以只读方式挂载候选内容，复制到一次性的工作目录，再运行 `CONFLICT_TEST_COMMAND`。基础设施错误会直接报告，不再误交给 goose 当作代码问题修复；只有真实的 merge 相关验证失败才允许一次聚焦修改，随后由宿主权威重跑一次。最后再由不带工具权限的 goose 纯对话调用对完整 staged diff 做只读确认。只有确认返回 `safeToCommit=true`，且远端 PR head 仍与审核 SHA 相同，才会 commit 并 push；同仓库分支普通 push，外部 fork 使用上文所述绑定 SHA 的 force-with-lease。新 commit 会触发 `synchronize` 并重新完整审核，不会把修复前的结论直接当作批准。
 
 ## goose 配置
 

@@ -2,6 +2,7 @@ import type { Octokit } from "@octokit/rest";
 import { config } from "../config.js";
 import { requiredChecksAreGreen } from "../github/checks.js";
 import { postPermissionDeniedComment } from "../github/commandFeedback.js";
+import { formatBotDisplayName } from "../github/botIdentity.js";
 import { collectValidNewLines, toDiffPosition } from "../github/diff.js";
 import { logger } from "../logger.js";
 import { withRetry } from "../retry.js";
@@ -34,6 +35,10 @@ const CHECK_RUN_NAME = "ghbot review";
 export const RECHECK_COMMENT_COMMAND = "/recheck";
 export const CONFLICT_COMMENT_COMMAND = "/conflict";
 const REVIEW_PROGRESS_MARKER_PREFIX = "<!-- ghbot-review-progress:v1";
+
+function conflictAutomationName(): string {
+  return formatBotDisplayName(config.botName);
+}
 
 export async function processPullRequest(
   octokit: Octokit,
@@ -208,7 +213,7 @@ export async function processPullRequest(
               owner,
               repo,
               issue_number: pullNumber,
-              body: "goose resolved the merge conflicts, validated the final changes, and pushed a new commit. The new head will be reviewed again before any merge decision."
+              body: `${conflictAutomationName()} resolved the merge conflicts, validated the final changes, and pushed a new commit. The new head will be reviewed again before any merge decision.`
             });
           });
           return;
@@ -220,7 +225,7 @@ export async function processPullRequest(
             owner,
             repo,
             issue_number: pullNumber,
-            body: `Automated review passed, but ${describeConflictResolutionFailure(error)}`
+            body: `Automated review passed, but ${describeConflictResolutionFailure(error, conflictAutomationName())}`
           });
         });
         return;
@@ -704,7 +709,7 @@ export async function processConflictComment(
   await postConflictCommandComment(
     octokit,
     params,
-    `Conflict resolution requested by @${params.commenterLogin}. goose is resolving the current head and will push only after the configured validation and a separate final confirmation pass succeed.`
+    `Conflict resolution requested by @${params.commenterLogin}. ${conflictAutomationName()} is resolving the current head and will push only after the configured validation and a separate final confirmation pass succeed.`
   );
   try {
     const repositoryKnowledge = config.repositoryKnowledgeEnabled
@@ -727,7 +732,7 @@ export async function processConflictComment(
       octokit,
       params,
       resolved
-        ? "goose resolved the conflicts, validated the complete result, and pushed a new commit. The new head will now receive a fresh review."
+        ? `${conflictAutomationName()} resolved the conflicts, validated the complete result, and pushed a new commit. The new head will now receive a fresh review.`
         : "The PR changed or no resolvable conflict remained before push, so no commit was created."
     );
   } catch (error) {
@@ -742,8 +747,9 @@ export async function processConflictComment(
     await postConflictCommandComment(
       octokit,
       params,
-      describeConflictResolutionFailure(error)
+      describeConflictResolutionFailure(error, conflictAutomationName())
     );
+    throw error;
   }
 }
 
