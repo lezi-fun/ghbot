@@ -126,7 +126,7 @@ prompt 还会收到由宿主通过 GitHub 验证的请求者上下文：评论�
 
 具有 `write`、`maintain` 或 `admin` 权限的协作者也可以评论精确命令 `/conflict`，显式要求执行同一套受保护的冲突修复。即使 `AUTO_RESOLVE_CONFLICTS=false`，该命令也可以运行；它不要求先有一次通过的审核，因为修复提交 push 后一定会对新 head 重新完整审核，修复动作本身不会直接批准合并。
 
-仅处理当前 head 未变化且可写的 PR 分支。同仓库分支可直接写入；外部 fork 只有贡献者启用 **Allow edits from maintainers** 才可处理，并使用绑定已审核 head SHA 的 `--force-with-lease` 推送，因此贡献者新提交的 commit 不会被覆盖。旧 head、非冲突状态、关闭 maintainer edits 和未通过审核的 PR 都会跳过。ghbot 在宿主生成本地 merge，再把无 `.git`、无凭据的净化快照交给 goose。goose 可以修改直接冲突文件，也可以在兼容性确有需要时调整相关调用方、类型、测试、lockfile、配置或文档；受保护的 Agent 配置和凭证路径会被拒绝。
+自动冲突修复仅处理当前 head 未变化的同仓库 PR。外部 fork 的 `pull_request_target` 仍保持纯 GitHub API 审核，不 checkout 贡献者代码；贡献者启用 **Allow edits from maintainers** 后，maintainer 可以显式评论 `/conflict`，由可信的评论 workflow checkout PR head，并使用绑定已审核 head SHA 的 `--force-with-lease` 推送，因此贡献者新提交的 commit 不会被覆盖。旧 head、非冲突状态、关闭 maintainer edits 和未通过审核的 PR 都会跳过。ghbot 在宿主生成本地 merge，再把无 `.git`、无凭据的净化快照交给 goose。goose 可以修改直接冲突文件，也可以在兼容性确有需要时调整相关调用方、类型、测试、lockfile、配置或文档；受保护的 Agent 配置和凭证路径会被拒绝。
 
 应用改动后，ghbot 检查未合并路径和 `git diff --check`。第二次隔离 goose 会审核完整 staged diff，并在配置后运行可信的 `CONFLICT_TEST_COMMAND`。只有第二次确认明确返回 `safeToCommit=true`，且远端 PR head 仍与审核 SHA 相同，才会创建普通 merge commit 并 push；绝不 force-push。新 commit 会触发 `synchronize` 并重新完整审核，不会把修复前的结论直接当作批准。
 
