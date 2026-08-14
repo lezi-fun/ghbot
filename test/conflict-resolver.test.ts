@@ -43,6 +43,10 @@ test("conflict failures are actionable without exposing raw command output", () 
     /Allow edits from maintainers/
   );
   assert.match(
+    describeConflictResolutionFailure(new Error("Committer identity unknown")),
+    /no bot committer identity/
+  );
+  assert.match(
     describeConflictResolutionFailure(new Error("rejected: stale info")),
     /Run \/conflict again/
   );

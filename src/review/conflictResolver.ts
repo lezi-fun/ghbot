@@ -124,6 +124,18 @@ export async function resolvePullRequestConflicts(
       return false;
     }
 
+    await runCommand("git", ["config", "user.name", config.botName], worktree, gitEnv);
+    await runCommand(
+      "git",
+      [
+        "config",
+        "user.email",
+        `${config.githubAppId ?? "41898282"}+${config.botName}@users.noreply.github.com`
+      ],
+      worktree,
+      gitEnv
+    );
+
     await runCommand(
       "git",
       ["fetch", "--no-tags", "origin", `${params.baseBranch}:refs/remotes/origin/ghbot-base`],
@@ -241,17 +253,6 @@ export async function resolvePullRequestConflicts(
       return false;
     }
 
-    await runCommand("git", ["config", "user.name", config.botName], worktree, gitEnv);
-    await runCommand(
-      "git",
-      [
-        "config",
-        "user.email",
-        `${config.githubAppId ?? "41898282"}+${config.botName}@users.noreply.github.com`
-      ],
-      worktree,
-      gitEnv
-    );
     await runCommand(
       "git",
       ["commit", "-m", `fix: resolve conflicts for PR #${params.pullNumber}`],
@@ -309,6 +310,9 @@ export function describeConflictResolutionFailure(error: unknown): string {
   const message = error instanceof Error ? error.message.toLowerCase() : "";
   if (message.includes("refusing to merge unrelated histories") || message.includes("shallow")) {
     return "Conflict repair could not prepare the merge because the PR checkout did not contain enough Git history. No commit was pushed.";
+  }
+  if (message.includes("committer identity unknown") || message.includes("empty ident name")) {
+    return "Conflict repair could not start the merge because the temporary Git worktree had no bot committer identity. No commit was pushed.";
   }
   if (
     message.includes("write access to repository not granted") ||
