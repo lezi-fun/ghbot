@@ -25,13 +25,14 @@ test("old bot reviews are cleaned only while the current review is preserved", a
   const deletedComments: number[] = [];
   const updatedReviews: Array<{ review_id: number; body: string }> = [];
   const dismissedReviews: number[] = [];
+  const minimizedReviews: Array<{ subjectId: string; classifier: string }> = [];
   const reviews = [
-    { id: 10, user: { type: "Bot" }, body: marker, state: "CHANGES_REQUESTED", commit_id: "a".repeat(40) },
-    { id: 20, user: { type: "Bot" }, body: marker, state: "APPROVED", commit_id: "b".repeat(40) },
-    { id: 30, user: { type: "User" }, body: marker, state: "COMMENTED", commit_id: "c".repeat(40) },
-    { id: 40, user: { type: "Bot" }, body: marker, state: "DISMISSED", commit_id: "d".repeat(40) },
-    { id: 50, user: { type: "Bot" }, body: "Unrelated automation", state: "COMMENTED", commit_id: "e".repeat(40) },
-    { id: 60, user: { type: "Bot" }, body: marker, state: "CHANGES_REQUESTED", commit_id: "b".repeat(40) }
+    { id: 10, node_id: "PRR_10", user: { type: "Bot" }, body: marker, state: "CHANGES_REQUESTED", commit_id: "a".repeat(40) },
+    { id: 20, node_id: "PRR_20", user: { type: "Bot" }, body: marker, state: "APPROVED", commit_id: "b".repeat(40) },
+    { id: 30, node_id: "PRR_30", user: { type: "User" }, body: marker, state: "COMMENTED", commit_id: "c".repeat(40) },
+    { id: 40, node_id: "PRR_40", user: { type: "Bot" }, body: marker, state: "DISMISSED", commit_id: "d".repeat(40) },
+    { id: 50, node_id: "PRR_50", user: { type: "Bot" }, body: "Unrelated automation", state: "COMMENTED", commit_id: "e".repeat(40) },
+    { id: 60, node_id: "PRR_60", user: { type: "Bot" }, body: marker, state: "CHANGES_REQUESTED", commit_id: "b".repeat(40) }
   ];
   const octokit = {
     paginate: async (method: unknown, params: { review_id?: number }) => {
@@ -66,6 +67,11 @@ test("old bot reviews are cleaned only while the current review is preserved", a
           return { data: {} };
         }
       }
+    },
+    graphql: async (query: string, variables: { subjectId: string }) => {
+      assert.match(query, /classifier: OUTDATED/);
+      minimizedReviews.push({ subjectId: variables.subjectId, classifier: "OUTDATED" });
+      return { minimizeComment: { minimizedComment: { isMinimized: true } } };
     }
   } as unknown as Octokit;
   const pulls = (octokit.rest as unknown as { pulls: { listReviews: unknown } }).pulls;
@@ -82,5 +88,10 @@ test("old bot reviews are cleaned only while the current review is preserved", a
   assert.deepEqual(updatedReviews.map((item) => item.review_id), [10, 40, 60]);
   assert.match(updatedReviews[0]!.body, /bbbbbbbbbbbb/);
   assert.deepEqual(dismissedReviews, [10, 60]);
+  assert.deepEqual(minimizedReviews, [
+    { subjectId: "PRR_10", classifier: "OUTDATED" },
+    { subjectId: "PRR_40", classifier: "OUTDATED" },
+    { subjectId: "PRR_60", classifier: "OUTDATED" }
+  ]);
   assert.ok(pulls.listReviews);
 });

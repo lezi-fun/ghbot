@@ -1327,6 +1327,19 @@ export async function supersedePreviousBotReviews(
           });
         });
       }
+
+      await withRetry("github.graphql.minimizeReview.superseded", async () => {
+        return octokit.graphql(
+          `mutation MinimizeSupersededReview($subjectId: ID!) {
+            minimizeComment(input: { subjectId: $subjectId, classifier: OUTDATED }) {
+              minimizedComment {
+                isMinimized
+              }
+            }
+          }`,
+          { subjectId: review.node_id }
+        );
+      });
     } catch (error) {
       logger.warn(
         {
