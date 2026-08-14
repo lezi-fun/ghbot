@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildGooseAgentDockerArgs,
+  buildGooseAgentEnvironment,
   buildWorkspacePermissionDockerArgs,
   extractGooseFinalText
 } from "../src/ai/gooseCli.js";
@@ -35,6 +36,16 @@ test("goose agent can fall back to installing inside the container", () => {
 
   assert.equal(args.some((arg) => arg.includes("target=/usr/local/bin/goose")), false);
   assert.match(args[args.indexOf("-lc") + 1]!, /GOOSE_VERSION="v1\.46\.0"/);
+});
+
+test("goose repository agent has enough turns to finish tool-heavy tasks", () => {
+  const environment = buildGooseAgentEnvironment({
+    apiToken: "one-run-token",
+    proxyPort: 43123
+  });
+
+  assert.equal(environment.GOOSE_MAX_TURNS, "50");
+  assert.equal(environment.OPENAI_BASE_URL, "http://host.docker.internal:43123/v1");
 });
 
 test("goose agent restores host-cleanable permissions for root-owned workspace entries", () => {

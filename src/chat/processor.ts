@@ -251,6 +251,7 @@ function buildChatPrompt(input: {
     chatReplyLanguageInstruction(input.commentBody),
     "Use the supplied current PR metadata and patch as context. When the question is related to repository code, inspect the checked-out current PR source before answering.",
     "You have full goose Developer tool permission inside a disposable isolated container. You may read and edit the temporary workspace, execute commands and tests, install dependencies, and use the network when useful to answer accurately.",
+    chatToolBudgetInstruction(),
     "Report commands or tests as completed only when their tool results show they actually completed. Workspace edits are temporary and cannot be committed or pushed.",
     ...(input.repositoryKnowledgeEnabled
       ? [
@@ -289,6 +290,10 @@ function buildChatPrompt(input: {
     `Latest comment by @${input.commenterLogin}:`,
     input.commentBody
   ].join("\n");
+}
+
+export function chatToolBudgetInstruction(): string {
+  return "Manage the finite tool-action budget autonomously. Do not ask the user whether to continue. Before the budget is exhausted, stop optional exploration, finish any authorized knowledge-file update, and return the best complete final answer with any remaining limitations stated clearly.";
 }
 
 function escapeRegExp(value: string): string {

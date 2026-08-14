@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import {
   buildChatRequesterContext,
+  chatToolBudgetInstruction,
   chatReplyLanguageInstruction,
   containsBotMention,
   createRepositorySnapshot,
@@ -48,6 +49,11 @@ test("PR chat replies in the language of the latest user comment", () => {
     chatReplyLanguageInstruction("@bot 请 review this PR"),
     /^Reply in Chinese\./
   );
+});
+
+test("PR chat must finish within its tool budget without asking to continue", () => {
+  assert.match(chatToolBudgetInstruction(), /Do not ask the user whether to continue/);
+  assert.match(chatToolBudgetInstruction(), /return the best complete final answer/);
 });
 
 test("PR chat recognizes @bot and the configured bot login", () => {

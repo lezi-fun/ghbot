@@ -94,27 +94,10 @@ export async function runGooseAgent(
   );
   const containerName = `ghbot-agent-${randomBytes(12).toString("hex")}`;
   const hostGooseBinary = await resolveHostGooseBinary();
-  const containerEnv = {
-    HOME: "/tmp/goose-home",
-    XDG_CONFIG_HOME: "/tmp/goose-home/config",
-    XDG_DATA_HOME: "/tmp/goose-home/data",
-    XDG_STATE_HOME: "/tmp/goose-home/state",
-    XDG_CACHE_HOME: "/tmp/goose-home/cache",
-    GOOSE_PROVIDER: "openai",
-    GOOSE_MODEL: config.gooseModel,
-    GOOSE_MODE: "auto",
-    GOOSE_DISABLE_KEYRING: "true",
-    GOOSE_DISABLE_SESSION_NAMING: "true",
-    GOOSE_TELEMETRY_ENABLED: "false",
-    GOOSE_MAX_TURNS: "25",
-    CONTEXT_FILE_NAMES: "[]",
-    OPENAI_API_KEY: proxy.token,
-    OPENAI_BASE_URL: `http://host.docker.internal:${proxy.port}/v1`,
-    OPENAI_TIMEOUT: "600",
-    ...(config.gooseThinkingEffort
-      ? { GOOSE_THINKING_EFFORT: config.gooseThinkingEffort }
-      : {})
-  };
+  const containerEnv = buildGooseAgentEnvironment({
+    apiToken: proxy.token,
+    proxyPort: proxy.port
+  });
   const args = buildGooseAgentDockerArgs({
     containerName,
     realWorkingDirectory,
@@ -143,6 +126,33 @@ export async function runGooseAgent(
       }
     }
   }
+}
+
+export function buildGooseAgentEnvironment(params: {
+  apiToken: string;
+  proxyPort: number;
+}): Record<string, string> {
+  return {
+    HOME: "/tmp/goose-home",
+    XDG_CONFIG_HOME: "/tmp/goose-home/config",
+    XDG_DATA_HOME: "/tmp/goose-home/data",
+    XDG_STATE_HOME: "/tmp/goose-home/state",
+    XDG_CACHE_HOME: "/tmp/goose-home/cache",
+    GOOSE_PROVIDER: "openai",
+    GOOSE_MODEL: config.gooseModel,
+    GOOSE_MODE: "auto",
+    GOOSE_DISABLE_KEYRING: "true",
+    GOOSE_DISABLE_SESSION_NAMING: "true",
+    GOOSE_TELEMETRY_ENABLED: "false",
+    GOOSE_MAX_TURNS: "50",
+    CONTEXT_FILE_NAMES: "[]",
+    OPENAI_API_KEY: params.apiToken,
+    OPENAI_BASE_URL: `http://host.docker.internal:${params.proxyPort}/v1`,
+    OPENAI_TIMEOUT: "600",
+    ...(config.gooseThinkingEffort
+      ? { GOOSE_THINKING_EFFORT: config.gooseThinkingEffort }
+      : {})
+  };
 }
 
 export function buildGooseAgentDockerArgs(params: {
