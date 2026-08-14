@@ -1,6 +1,37 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { extractGooseFinalText } from "../src/ai/gooseCli.js";
+import {
+  buildGooseAgentDockerArgs,
+  extractGooseFinalText
+} from "../src/ai/gooseCli.js";
+
+test("goose agent mounts the workflow binary read-only and keeps a visible install fallback", () => {
+  const args = buildGooseAgentDockerArgs({
+    containerName: "ghbot-agent-test",
+    realWorkingDirectory: "/tmp/worktree",
+    containerEnv: { OPENAI_API_KEY: "one-run-token" },
+    hostGooseBinary: "/tmp/goose/bin/goose",
+    prompt: "introduce this pull request"
+  });
+
+  assert.ok(args.includes("type=bind,source=/tmp/goose/bin/goose,target=/usr/local/bin/goose,readonly"));
+  const bootstrap = args[args.indexOf("-lc") + 1];
+  assert.match(bootstrap!, /command -v goose/);
+  assert.match(bootstrap!, /cat \/tmp\/goose-install\.log >&2/);
+  assert.equal(args.at(-1), "introduce this pull request");
+});
+
+test("goose agent can fall back to installing inside the container", () => {
+  const args = buildGooseAgentDockerArgs({
+    containerName: "ghbot-agent-test",
+    realWorkingDirectory: "/tmp/worktree",
+    containerEnv: {},
+    prompt: "inspect this pull request"
+  });
+
+  assert.equal(args.some((arg) => arg.includes("target=/usr/local/bin/goose")), false);
+  assert.match(args[args.indexOf("-lc") + 1]!, /GOOSE_VERSION="v1\.46\.0"/);
+});
 
 test("goose output extracts the latest assistant text", () => {
   const output = JSON.stringify({

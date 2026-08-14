@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import path from "node:path";
@@ -10,6 +11,19 @@ import { startOneRunApiProxy } from "./apiProxy.js";
 const GOOSE_RUN_TIMEOUT_MS = 10 * 60 * 1000;
 const GOOSE_DOCKER_IMAGE = "node:24-bookworm";
 const GOOSE_DOCKER_VERSION = "v1.46.0";
+const GOOSE_CONTAINER_PATH = "/usr/local/bin/goose";
+const GOOSE_CONTAINER_BOOTSTRAP = [
+  "set -eu",
+  "if ! command -v goose >/dev/null 2>&1; then",
+  "  curl -fsSL https://github.com/aaif-goose/goose/releases/download/stable/download_cli.sh -o /tmp/download_cli.sh",
+  `  if ! GOOSE_VERSION="${GOOSE_DOCKER_VERSION}" GOOSE_BIN_DIR=/tmp/goose-bin CONFIGURE=false bash /tmp/download_cli.sh >/tmp/goose-install.log 2>&1; then`,
+  "    cat /tmp/goose-install.log >&2",
+  "    exit 1",
+  "  fi",
+  '  export PATH="/tmp/goose-bin:$PATH"',
+  "fi",
+  'exec goose "$@"'
+].join("\n");
 
 export async function runGoosePrompt(
   prompt: string,
@@ -73,6 +87,7 @@ export async function runGooseAgent(
     config.gooseApiKey
   );
   const containerName = `ghbot-agent-${randomBytes(12).toString("hex")}`;
+  const hostGooseBinary = await resolveHostGooseBinary();
   const containerEnv = {
     HOME: "/tmp/goose-home",
     XDG_CONFIG_HOME: "/tmp/goose-home/config",
@@ -94,50 +109,13 @@ export async function runGooseAgent(
       ? { GOOSE_THINKING_EFFORT: config.gooseThinkingEffort }
       : {})
   };
-  const args = [
-    "run",
-    "--name",
+  const args = buildGooseAgentDockerArgs({
     containerName,
-    "--init",
-    "--user",
-    "root",
-    "--cpus",
-    "2",
-    "--memory",
-    "4g",
-    "--pids-limit",
-    "512",
-    "--security-opt",
-    "no-new-privileges",
-    "--cap-drop",
-    "ALL",
-    "--add-host",
-    "host.docker.internal:host-gateway",
-    "--mount",
-    `type=bind,source=${realWorkingDirectory},target=/workspace`,
-    "--workdir",
-    "/workspace",
-    ...Object.keys(containerEnv).flatMap((key) => ["--env", key]),
-    GOOSE_DOCKER_IMAGE,
-    "sh",
-    "-lc",
-    `set -eu; curl -fsSL https://github.com/aaif-goose/goose/releases/download/stable/download_cli.sh -o /tmp/download_cli.sh; GOOSE_VERSION="${GOOSE_DOCKER_VERSION}" GOOSE_BIN_DIR=/tmp/goose-bin CONFIGURE=false bash /tmp/download_cli.sh >/tmp/goose-install.log; export PATH="/tmp/goose-bin:$PATH"; exec goose "$@"`,
-    "ghbot",
-    "run",
-    "--no-session",
-    "--no-profile",
-    "--quiet",
-    "--output-format",
-    "json",
-    "--provider",
-    "openai",
-    "--model",
-    config.gooseModel,
-    "--with-builtin",
-    "developer",
-    "--text",
+    realWorkingDirectory,
+    containerEnv,
+    hostGooseBinary,
     prompt
-  ];
+  });
 
   try {
     const stdout = await runProcess(
@@ -154,6 +132,89 @@ export async function runGooseAgent(
     } finally {
       await proxy.close();
     }
+  }
+}
+
+export function buildGooseAgentDockerArgs(params: {
+  containerName: string;
+  realWorkingDirectory: string;
+  containerEnv: Record<string, string>;
+  prompt: string;
+  hostGooseBinary?: string;
+}): string[] {
+  return [
+    "run",
+    "--name",
+    params.containerName,
+    "--init",
+    "--user",
+    "root",
+    "--cpus",
+    "2",
+    "--memory",
+    "4g",
+    "--pids-limit",
+    "512",
+    "--security-opt",
+    "no-new-privileges",
+    "--cap-drop",
+    "ALL",
+    "--add-host",
+    "host.docker.internal:host-gateway",
+    "--mount",
+    `type=bind,source=${params.realWorkingDirectory},target=/workspace`,
+    ...(params.hostGooseBinary
+      ? [
+          "--mount",
+          `type=bind,source=${params.hostGooseBinary},target=${GOOSE_CONTAINER_PATH},readonly`
+        ]
+      : []),
+    "--workdir",
+    "/workspace",
+    ...Object.keys(params.containerEnv).flatMap((key) => ["--env", key]),
+    GOOSE_DOCKER_IMAGE,
+    "sh",
+    "-lc",
+    GOOSE_CONTAINER_BOOTSTRAP,
+    "ghbot",
+    "run",
+    "--no-session",
+    "--no-profile",
+    "--quiet",
+    "--output-format",
+    "json",
+    "--provider",
+    "openai",
+    "--model",
+    config.gooseModel,
+    "--with-builtin",
+    "developer",
+    "--text",
+    params.prompt
+  ];
+}
+
+async function resolveHostGooseBinary(): Promise<string | undefined> {
+  const configuredPath = process.env.GHBOT_GOOSE_BINARY?.trim();
+  if (!configuredPath || process.platform !== "linux") {
+    return undefined;
+  }
+
+  try {
+    const resolvedPath = await fs.realpath(configuredPath);
+    const stat = await fs.stat(resolvedPath);
+    if (!stat.isFile() || resolvedPath.includes(",")) {
+      throw new Error("configured Goose binary is not a mountable file path");
+    }
+    await fs.access(resolvedPath, fsConstants.X_OK);
+    logger.info({ hostGooseBinary: resolvedPath }, "Using the workflow Goose binary inside the agent container.");
+    return resolvedPath;
+  } catch (error) {
+    logger.warn(
+      { error, configuredPath },
+      "Configured workflow Goose binary is unavailable; falling back to an in-container install."
+    );
+    return undefined;
   }
 }
 

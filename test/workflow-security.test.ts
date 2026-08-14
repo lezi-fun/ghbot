@@ -7,5 +7,6 @@ test("pull_request_target checks out a PR worktree only for same-repository head
   const caller = await fs.readFile(".github/workflows/review.yml", "utf8");
   assert.match(workflow, /pull_head_repository == format\('\{0\}\/\{1\}'/);
   assert.doesNotMatch(workflow, /allow-unsafe-pr-checkout:\s*true/);
+  assert.match(workflow, /GHBOT_GOOSE_BINARY:\s*\$\{\{ runner\.temp \}\}\/goose\/bin\/goose/);
   assert.match(caller, /pull_head_repository:\s*\$\{\{ github\.event\.pull_request\.head\.repo\.full_name \|\| '' \}\}/);
 });

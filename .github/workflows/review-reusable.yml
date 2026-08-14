@@ -272,6 +272,7 @@ jobs:
           GHBOT_REPOSITORY_ID: ${{ inputs.repository_id }}
           GHBOT_PULL_NUMBER: ${{ inputs.pull_number }}
           GHBOT_PULL_HEAD_REPOSITORY: ${{ inputs.pull_head_repository }}
+          GHBOT_GOOSE_BINARY: ${{ runner.temp }}/goose/bin/goose
           GHBOT_COMMENT_ID: ${{ inputs.comment_id }}
           GHBOT_COMMENTER_LOGIN: ${{ inputs.commenter_login }}
           GHBOT_COMMENT_BODY: ${{ inputs.comment_body }}
