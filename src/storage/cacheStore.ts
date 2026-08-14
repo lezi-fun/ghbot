@@ -79,6 +79,7 @@ export async function savePersistentCache(params: {
   repositoryId: string;
   owner: string;
   repo: string;
+  saveRepositoryKnowledge: boolean;
   pullNumber?: number;
   runtimeDirectory?: string;
   prefix?: string;
@@ -90,13 +91,15 @@ export async function savePersistentCache(params: {
   const runtimeDirectory = params.runtimeDirectory ?? process.cwd();
   const storage = params.storage ?? r2Store;
 
-  await saveObjectIfPresent({
-    key: repositoryKnowledgeObjectKey(params.repositoryId, params.prefix),
-    source: path.join(runtimeDirectory, REPOSITORY_KNOWLEDGE_CACHE_PATH),
-    contentType: "text/markdown; charset=utf-8",
-    validate: (content) => validateRepositoryKnowledge(content.toString("utf8")),
-    storage
-  });
+  if (params.saveRepositoryKnowledge) {
+    await saveObjectIfPresent({
+      key: repositoryKnowledgeObjectKey(params.repositoryId, params.prefix),
+      source: path.join(runtimeDirectory, REPOSITORY_KNOWLEDGE_CACHE_PATH),
+      contentType: "text/markdown; charset=utf-8",
+      validate: (content) => validateRepositoryKnowledge(content.toString("utf8")),
+      storage
+    });
+  }
 
   if (params.pullNumber) {
     const source = reviewCacheFilePath(params.pullNumber, runtimeDirectory);

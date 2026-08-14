@@ -102,12 +102,17 @@ async function main(): Promise<void> {
     pullNumber: pullNumberForCache,
     prefix: config.r2Prefix
   };
-  await restorePersistentCache(persistentCache).catch((error: unknown) => {
+  let persistentCacheRestored = false;
+  await restorePersistentCache(persistentCache).then(() => {
+    persistentCacheRestored = true;
+  }).catch((error: unknown) => {
     logger.warn({ error, eventName }, "Persistent R2 cache restore failed; continuing without it.");
   });
+  let repositoryKnowledgeBefore: string | undefined;
   if (config.repositoryKnowledgeEnabled) {
-    await loadRepositoryKnowledge().catch((error: unknown) => {
+    repositoryKnowledgeBefore = await loadRepositoryKnowledge().catch((error: unknown) => {
       logger.warn({ error, eventName }, "Repository knowledge initialization failed; continuing without it.");
+      return undefined;
     });
   }
 
@@ -276,7 +281,17 @@ async function main(): Promise<void> {
     throw error;
   } finally {
     if (!eventFailed) {
-      await savePersistentCache(persistentCache).catch((error: unknown) => {
+      const repositoryKnowledgeAfter = persistentCacheRestored && repositoryKnowledgeBefore !== undefined
+        ? await loadRepositoryKnowledge().catch((error: unknown) => {
+            logger.warn({ error, eventName }, "Repository knowledge comparison failed; skipping its R2 update.");
+            return undefined;
+          })
+        : undefined;
+      await savePersistentCache({
+        ...persistentCache,
+        saveRepositoryKnowledge:
+          repositoryKnowledgeAfter !== undefined && repositoryKnowledgeAfter !== repositoryKnowledgeBefore
+      }).catch((error: unknown) => {
         logger.warn({ error, eventName }, "Persistent R2 cache save failed; review results remain valid for this run.");
       });
     }

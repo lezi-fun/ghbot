@@ -70,6 +70,7 @@ test("persistent cache restores and saves validated repository and PR state", as
         repositoryId: "12345",
         owner: "forumlify",
         repo: "public",
+        saveRepositoryKnowledge: true,
         pullNumber: 17,
         prefix: "forum-114614",
         runtimeDirectory: source,
@@ -100,6 +101,59 @@ test("persistent cache restores and saves validated repository and PR state", as
   } finally {
     await fs.rm(source, { recursive: true, force: true });
     await fs.rm(restored, { recursive: true, force: true });
+  }
+});
+
+test("persistent cache does not overwrite newer repository knowledge when this run did not change it", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ghbot-r2-stale-"));
+  const knowledgeKey = repositoryKnowledgeObjectKey("12345", "forum-114614");
+  const objects = new Map<string, Buffer>([
+    [knowledgeKey, Buffer.from("# Newer knowledge\n\nKeep the Lite branch facts.\n")]
+  ]);
+  const storage: PersistentObjectStore = {
+    download: async (key) => objects.get(key),
+    upload: async ({ key, body }) => { objects.set(key, Buffer.from(body)); }
+  };
+
+  try {
+    const originalCwd = process.cwd();
+    process.chdir(root);
+    try {
+      await saveRepositoryKnowledgeCache("# Stale knowledge\n\nOnly next is known.\n", root);
+      await saveReviewCache({
+        owner: "forumlify",
+        repo: "public",
+        pullNumber: 17,
+        headSha: "b".repeat(40),
+        decision
+      });
+      await savePersistentCache({
+        repositoryId: "12345",
+        owner: "forumlify",
+        repo: "public",
+        saveRepositoryKnowledge: false,
+        pullNumber: 17,
+        prefix: "forum-114614",
+        runtimeDirectory: root,
+        storage
+      });
+    } finally {
+      process.chdir(originalCwd);
+    }
+
+    assert.equal(
+      objects.get(knowledgeKey)?.toString("utf8"),
+      "# Newer knowledge\n\nKeep the Lite branch facts.\n"
+    );
+    assert.ok(objects.has(pullRequestReviewObjectKey("12345", 17, "forum-114614")));
+    assert.ok(objects.has(pullRequestReviewHistoryObjectKey(
+      "12345",
+      17,
+      "b".repeat(40),
+      "forum-114614"
+    )));
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
   }
 });
 
