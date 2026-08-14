@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildGooseAgentDockerArgs,
+  buildWorkspacePermissionDockerArgs,
   extractGooseFinalText
 } from "../src/ai/gooseCli.js";
 
@@ -18,6 +19,9 @@ test("goose agent mounts the workflow binary read-only and keeps a visible insta
   const bootstrap = args[args.indexOf("-lc") + 1];
   assert.match(bootstrap!, /command -v goose/);
   assert.match(bootstrap!, /cat \/tmp\/goose-install\.log >&2/);
+  assert.match(bootstrap!, /trap cleanup_workspace EXIT/);
+  assert.match(bootstrap!, /chmod -R a\+rwX \/workspace/);
+  assert.doesNotMatch(bootstrap!, /exec goose "\$@"/);
   assert.equal(args.at(-1), "introduce this pull request");
 });
 
@@ -31,6 +35,18 @@ test("goose agent can fall back to installing inside the container", () => {
 
   assert.equal(args.some((arg) => arg.includes("target=/usr/local/bin/goose")), false);
   assert.match(args[args.indexOf("-lc") + 1]!, /GOOSE_VERSION="v1\.46\.0"/);
+});
+
+test("goose agent restores host-cleanable permissions for root-owned workspace entries", () => {
+  const args = buildWorkspacePermissionDockerArgs("/tmp/worktree");
+
+  assert.ok(args.includes("--rm"));
+  assert.ok(args.includes("none"));
+  assert.ok(args.includes("type=bind,source=/tmp/worktree,target=/workspace"));
+  const script = args[args.indexOf("-lc") + 1];
+  assert.match(script!, /find \/workspace/);
+  assert.match(script!, /-uid 0/);
+  assert.match(script!, /chmod a\+rwX/);
 });
 
 test("goose output extracts the latest assistant text", () => {

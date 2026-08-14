@@ -14,6 +14,8 @@ const GOOSE_DOCKER_VERSION = "v1.46.0";
 const GOOSE_CONTAINER_PATH = "/usr/local/bin/goose";
 const GOOSE_CONTAINER_BOOTSTRAP = [
   "set -eu",
+  "cleanup_workspace() { chmod -R a+rwX /workspace 2>/dev/null || true; }",
+  "trap cleanup_workspace EXIT",
   "if ! command -v goose >/dev/null 2>&1; then",
   "  curl -fsSL https://github.com/aaif-goose/goose/releases/download/stable/download_cli.sh -o /tmp/download_cli.sh",
   `  if ! GOOSE_VERSION="${GOOSE_DOCKER_VERSION}" GOOSE_BIN_DIR=/tmp/goose-bin CONFIGURE=false bash /tmp/download_cli.sh >/tmp/goose-install.log 2>&1; then`,
@@ -22,7 +24,11 @@ const GOOSE_CONTAINER_BOOTSTRAP = [
   "  fi",
   '  export PATH="/tmp/goose-bin:$PATH"',
   "fi",
-  'exec goose "$@"'
+  'goose "$@"'
+].join("\n");
+const GOOSE_WORKSPACE_PERMISSION_SCRIPT = [
+  "set -eu",
+  "find /workspace \\( -type d -o -type f \\) -uid 0 -exec chmod a+rwX {} +"
 ].join("\n");
 
 export async function runGoosePrompt(
@@ -130,7 +136,11 @@ export async function runGooseAgent(
     try {
       await removeDockerContainer(containerName, realWorkingDirectory);
     } finally {
-      await proxy.close();
+      try {
+        await restoreAgentWorkspacePermissions(realWorkingDirectory);
+      } finally {
+        await proxy.close();
+      }
     }
   }
 }
@@ -192,6 +202,46 @@ export function buildGooseAgentDockerArgs(params: {
     "--text",
     params.prompt
   ];
+}
+
+export function buildWorkspacePermissionDockerArgs(realWorkingDirectory: string): string[] {
+  return [
+    "run",
+    "--rm",
+    "--init",
+    "--user",
+    "root",
+    "--cpus",
+    "1",
+    "--memory",
+    "256m",
+    "--pids-limit",
+    "64",
+    "--network",
+    "none",
+    "--security-opt",
+    "no-new-privileges",
+    "--cap-drop",
+    "ALL",
+    "--mount",
+    `type=bind,source=${realWorkingDirectory},target=/workspace`,
+    "--workdir",
+    "/workspace",
+    GOOSE_DOCKER_IMAGE,
+    "sh",
+    "-lc",
+    GOOSE_WORKSPACE_PERMISSION_SCRIPT
+  ];
+}
+
+async function restoreAgentWorkspacePermissions(realWorkingDirectory: string): Promise<void> {
+  await runProcess(
+    "docker",
+    buildWorkspacePermissionDockerArgs(realWorkingDirectory),
+    {},
+    realWorkingDirectory,
+    "goose agent workspace permission cleanup"
+  );
 }
 
 async function resolveHostGooseBinary(): Promise<string | undefined> {
