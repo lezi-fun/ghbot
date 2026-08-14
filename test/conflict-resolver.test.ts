@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildValidationRepairPrompt,
   buildConflictPushArgs,
   buildConflictReviewDiffArgs,
   canAutoResolveConflicts,
@@ -116,4 +117,16 @@ test("snapshot inventory detects related file additions, changes, and deletions"
     diffSnapshotInventories(before, after),
     ["compatibility.test.ts", "conflicted.ts", "removed.test.ts"]
   );
+});
+
+test("validation repair prompt requires the exact command without allowing test weakening", () => {
+  const prompt = buildValidationRepairPrompt({
+    testCommand: "npm ci && npm test",
+    summary: "One compatibility test failed.",
+    concerns: ["The handler and its test disagree."]
+  });
+  assert.match(prompt, /npm ci && npm test/);
+  assert.match(prompt, /handler and its test disagree/);
+  assert.match(prompt, /do not .*weaken\/delete tests/i);
+  assert.match(prompt, /related validation failures/i);
 });
