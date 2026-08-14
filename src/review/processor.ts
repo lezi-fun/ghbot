@@ -172,6 +172,7 @@ export async function processPullRequest(
     mergeableState: mergeablePullRequest.mergeable_state,
     baseRepository: `${owner}/${repo}`,
     headRepository: pullRequest.head.repo?.full_name ?? null,
+    maintainerCanModify: pullRequest.maintainer_can_modify ?? false,
     expectedHeadSha: pullRequest.head.sha,
     currentHeadSha: currentPullRequest.head.sha
   });
@@ -192,6 +193,7 @@ export async function processPullRequest(
           baseBranch: pullRequest.base.ref,
           headBranch: pullRequest.head.ref,
           headRepository: pullRequest.head.repo?.full_name ?? null,
+          maintainerCanModify: pullRequest.maintainer_can_modify ?? false,
           worktree,
           gitToken,
           repositoryKnowledge
@@ -669,12 +671,13 @@ export async function processConflictComment(
     mergeableState: mergeablePullRequest.mergeable_state,
     baseRepository: `${params.owner}/${params.repo}`,
     headRepository: pullRequest.head.repo?.full_name ?? null,
+    maintainerCanModify: pullRequest.maintainer_can_modify ?? false,
     expectedHeadSha: pullRequest.head.sha,
     currentHeadSha: mergeablePullRequest.head.sha
   });
   if (!eligible) {
-    const reason = pullRequest.head.repo?.full_name !== `${params.owner}/${params.repo}`
-      ? "The PR comes from an external fork, and ghbot never pushes conflict-resolution commits to contributor forks."
+    const reason = pullRequest.head.repo?.full_name !== `${params.owner}/${params.repo}` && !pullRequest.maintainer_can_modify
+      ? "The PR comes from an external fork whose contributor has disabled maintainer edits. Enable ‘Allow edits from maintainers’, then run /conflict again."
       : mergeablePullRequest.mergeable_state !== "dirty"
         ? `GitHub does not currently report a merge conflict (mergeable=${mergeablePullRequest.mergeable}, mergeable_state=${mergeablePullRequest.mergeable_state}).`
         : "The PR head changed while conflict eligibility was being checked. Run /conflict again on the latest head.";
@@ -704,6 +707,7 @@ export async function processConflictComment(
       baseBranch: pullRequest.base.ref,
       headBranch: pullRequest.head.ref,
       headRepository: pullRequest.head.repo?.full_name ?? null,
+      maintainerCanModify: pullRequest.maintainer_can_modify ?? false,
       worktree,
       gitToken: params.gitToken,
       repositoryKnowledge

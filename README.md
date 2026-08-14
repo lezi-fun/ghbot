@@ -112,7 +112,7 @@ Set `AUTO_RESOLVE_CONFLICTS=true` to allow goose to repair a PR that passed revi
 
 A collaborator with `write`, `maintain`, or `admin` permission can also explicitly request the same guarded repair by posting the exact command `/conflict`. This manual command works even when `AUTO_RESOLVE_CONFLICTS=false`; it does not require an earlier passing review because the resulting commit always triggers a new complete review before any merge decision.
 
-Conflict repair applies only to a current-head PR branch in the same repository. External forks, stale heads, non-dirty states, and failed reviews are skipped. ghbot creates the merge locally, gives goose a sanitized credential-free snapshot, and allows it to change direct conflict files plus related callers, types, tests, lockfiles, configuration, or documentation when necessary for compatibility. Protected agent/configuration and credential paths are rejected.
+Conflict repair applies to a current, writable PR head. Same-repository branches are writable directly; external forks are eligible only when the contributor enabled **Allow edits from maintainers**. Fork pushes use an explicit `--force-with-lease` tied to the reviewed head SHA, so a newly pushed contributor commit is never overwritten. Stale heads, non-dirty states, disabled maintainer edits, and failed reviews are skipped. ghbot creates the merge locally, gives goose a sanitized credential-free snapshot, and allows it to change direct conflict files plus related callers, types, tests, lockfiles, configuration, or documentation when necessary for compatibility. Protected agent/configuration and credential paths are rejected.
 
 After applying the proposed files, ghbot verifies there are no unmerged paths and runs `git diff --check`. A second isolated goose pass reviews the complete staged diff and, when configured, runs the trusted `CONFLICT_TEST_COMMAND`. The result is committed and pushed only when that final pass returns `safeToCommit=true` and the remote PR head still matches the reviewed SHA. ghbot never force-pushes. The new commit triggers a fresh `synchronize` review; the old decision is not reused as approval.
 
@@ -208,7 +208,7 @@ An eligible repository user can comment the exact command:
 /conflict
 ```
 
-The bot attempts conflict repair only when GitHub reports the current open PR as conflicted and its head branch belongs to the same repository. External forks are never pushed. It runs the same configured validation and separate final goose confirmation used by automatic repair, then pushes a normal commit only if both succeed and the head has not changed.
+The bot attempts conflict repair only when GitHub reports the current open PR as conflicted and the head is writable. External forks require **Allow edits from maintainers**; their resolved head is pushed with a force lease pinned to the reviewed SHA. It runs the same configured validation and separate final goose confirmation used by automatic repair, then pushes only if both succeed and the head has not changed.
 
 ## Local development
 

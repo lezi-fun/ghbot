@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildConflictPushArgs,
   canAutoResolveConflicts,
   diffSnapshotInventories
 } from "../src/review/conflictResolver.js";
@@ -12,17 +13,49 @@ const eligible = {
   mergeableState: "dirty",
   baseRepository: "forumlify/public",
   headRepository: "forumlify/public",
+  maintainerCanModify: false,
   expectedHeadSha: "abc",
   currentHeadSha: "abc"
 } as const;
 
-test("only a passing conflicted same-repository current head is eligible", () => {
+test("only a passing conflicted writable current head is eligible", () => {
   assert.equal(canAutoResolveConflicts(eligible), true);
   assert.equal(canAutoResolveConflicts({ ...eligible, reviewPassed: false }), false);
   assert.equal(canAutoResolveConflicts({ ...eligible, mergeable: true, mergeableState: "clean" }), false);
   assert.equal(canAutoResolveConflicts({ ...eligible, headRepository: "contributor/fork" }), false);
+  assert.equal(canAutoResolveConflicts({
+    ...eligible,
+    headRepository: "contributor/fork",
+    maintainerCanModify: true
+  }), true);
   assert.equal(canAutoResolveConflicts({ ...eligible, currentHeadSha: "new-head" }), false);
   assert.equal(canAutoResolveConflicts({ ...eligible, enabled: false }), false);
+});
+
+test("external fork conflict pushes use a head-SHA force lease", () => {
+  assert.deepEqual(buildConflictPushArgs({
+    baseRepository: "forumlify/public",
+    headRepository: "contributor/forumlify",
+    headBranch: "fix/conflicts",
+    expectedHeadSha: "a".repeat(40)
+  }), [
+    "push",
+    `--force-with-lease=refs/heads/fix/conflicts:${"a".repeat(40)}`,
+    "https://github.com/contributor/forumlify.git",
+    "HEAD:refs/heads/fix/conflicts"
+  ]);
+  assert.deepEqual(buildConflictPushArgs({
+    baseRepository: "forumlify/public",
+    headRepository: "forumlify/public",
+    headBranch: "fix/conflicts",
+    expectedHeadSha: "b".repeat(40)
+  }), ["push", "origin", "HEAD:refs/heads/fix/conflicts"]);
+  assert.throws(() => buildConflictPushArgs({
+    baseRepository: "forumlify/public",
+    headRepository: "contributor/forumlify",
+    headBranch: "bad:branch",
+    expectedHeadSha: "c".repeat(40)
+  }), /Unsafe PR head branch/);
 });
 
 test("snapshot inventory detects related file additions, changes, and deletions", () => {

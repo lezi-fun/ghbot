@@ -22,6 +22,7 @@ export type ConflictResolutionEligibility = {
   mergeableState: string;
   baseRepository: string;
   headRepository: string | null;
+  maintainerCanModify: boolean;
   expectedHeadSha: string;
   currentHeadSha: string;
 };
@@ -43,7 +44,8 @@ export function canAutoResolveConflicts(input: ConflictResolutionEligibility): b
     input.reviewPassed &&
     input.mergeable === false &&
     input.mergeableState === "dirty" &&
-    input.headRepository === input.baseRepository &&
+    input.headRepository !== null &&
+    (input.headRepository === input.baseRepository || input.maintainerCanModify) &&
     input.currentHeadSha === input.expectedHeadSha
   );
 }
@@ -58,15 +60,25 @@ export async function resolvePullRequestConflicts(
     baseBranch: string;
     headBranch: string;
     headRepository: string | null;
+    maintainerCanModify: boolean;
     worktree: string;
     gitToken: string;
     repositoryKnowledge?: string;
   }
 ): Promise<boolean> {
-  if (params.headRepository !== `${params.owner}/${params.repo}`) {
+  const baseRepository = `${params.owner}/${params.repo}`;
+  if (!params.headRepository) {
     logger.info(
       { owner: params.owner, repo: params.repo, pullNumber: params.pullNumber },
-      "Skipping automatic conflict resolution for an external fork."
+      "Skipping conflict resolution because the PR head repository is unavailable."
+    );
+    return false;
+  }
+  const externalFork = params.headRepository !== baseRepository;
+  if (externalFork && !params.maintainerCanModify) {
+    logger.info(
+      { owner: params.owner, repo: params.repo, pullNumber: params.pullNumber },
+      "Skipping conflict resolution because the external contributor disabled maintainer edits."
     );
     return false;
   }
@@ -206,7 +218,12 @@ export async function resolvePullRequestConflicts(
       repo: params.repo,
       pull_number: params.pullNumber
     });
-    if (currentPullRequest.state !== "open" || currentPullRequest.head.sha !== params.expectedHeadSha) {
+    if (
+      currentPullRequest.state !== "open" ||
+      currentPullRequest.head.sha !== params.expectedHeadSha ||
+      currentPullRequest.head.repo?.full_name !== params.headRepository ||
+      (externalFork && !currentPullRequest.maintainer_can_modify)
+    ) {
       logger.info(
         {
           owner: params.owner,
@@ -214,9 +231,11 @@ export async function resolvePullRequestConflicts(
           pullNumber: params.pullNumber,
           expectedHead: params.expectedHeadSha,
           currentHead: currentPullRequest.head.sha,
-          currentState: currentPullRequest.state
+          currentState: currentPullRequest.state,
+          currentHeadRepository: currentPullRequest.head.repo?.full_name,
+          maintainerCanModify: currentPullRequest.maintainer_can_modify
         },
-        "Discarding conflict resolution because the pull request changed before push."
+        "Discarding conflict resolution because the pull request or maintainer-edit permission changed before push."
       );
       await runCommand("git", ["merge", "--abort"], worktree, gitEnv);
       return false;
@@ -239,12 +258,12 @@ export async function resolvePullRequestConflicts(
       worktree,
       gitEnv
     );
-    await runCommand(
-      "git",
-      ["push", "origin", `HEAD:refs/heads/${params.headBranch}`],
-      worktree,
-      gitEnv
-    );
+    await runCommand("git", buildConflictPushArgs({
+      baseRepository,
+      headRepository: params.headRepository,
+      headBranch: params.headBranch,
+      expectedHeadSha: params.expectedHeadSha
+    }), worktree, gitEnv);
     return true;
   } catch (error) {
     await runCommand("git", ["merge", "--abort"], worktree, gitEnv).catch(() => undefined);
@@ -255,6 +274,54 @@ export async function resolvePullRequestConflicts(
     }
     await fs.rm(askPassDirectory, { recursive: true, force: true });
   }
+}
+
+export function buildConflictPushArgs(params: {
+  baseRepository: string;
+  headRepository: string;
+  headBranch: string;
+  expectedHeadSha: string;
+}): string[] {
+  if (!isSafeGitHubRepository(params.headRepository)) {
+    throw new Error(`Unsafe PR head repository: ${params.headRepository}`);
+  }
+  if (!isSafeGitBranch(params.headBranch)) {
+    throw new Error(`Unsafe PR head branch: ${params.headBranch}`);
+  }
+  if (!/^[0-9a-f]{40,64}$/i.test(params.expectedHeadSha)) {
+    throw new Error("Expected PR head SHA must contain 40-64 hexadecimal characters.");
+  }
+
+  const headRef = `refs/heads/${params.headBranch}`;
+  if (params.headRepository === params.baseRepository) {
+    return ["push", "origin", `HEAD:${headRef}`];
+  }
+
+  return [
+    "push",
+    `--force-with-lease=${headRef}:${params.expectedHeadSha}`,
+    `https://github.com/${params.headRepository}.git`,
+    `HEAD:${headRef}`
+  ];
+}
+
+function isSafeGitHubRepository(value: string): boolean {
+  return value.split("/").length === 2 && value.split("/").every((part) => (
+    part !== "." && part !== ".." && /^[A-Za-z0-9_.-]+$/.test(part)
+  ));
+}
+
+function isSafeGitBranch(value: string): boolean {
+  return (
+    value.length > 0 &&
+    !value.startsWith("-") &&
+    !value.startsWith("/") &&
+    !value.endsWith("/") &&
+    !value.endsWith(".") &&
+    !value.includes("..") &&
+    !value.includes("@{") &&
+    !/[\u0000-\u0020~^:?*[\\]/.test(value)
+  );
 }
 
 function buildConflictPrompt(
