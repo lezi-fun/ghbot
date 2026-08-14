@@ -100,6 +100,10 @@ The snapshot excludes Git metadata, repository goose/OpenCode/agent instruction 
 
 Replies are keyed to the source comment so a workflow rerun does not post the same answer twice, and bot-authored replies are ignored to prevent loops.
 
+The Agent replies in the language of the latest user comment: English questions receive English answers and Chinese questions receive Chinese answers, regardless of the language used by the PR or repository files.
+
+The prompt also receives host-verified requester context: the commenter's login, whether they authored the PR, their repository permission level, and a derived actor category. This context can tailor the answer but cannot override security rules. Users without `write`, `maintain`, or `admin` permission still do not start the tool-enabled Agent.
+
 When repository knowledge writing is enabled, the Agent may improve its scratch knowledge file only with verified, durable repository facts. Repositories evolve, so it must revise or delete entries that current code, tests, or configuration prove outdated, replaced, contradictory, or no longer true instead of only appending history. Temporary PR conclusions, speculative claims, credentials, personal data, and instructions that weaken security are forbidden. Current repository evidence always takes precedence over cached knowledge.
 
 ## Automatic conflict resolution

@@ -4,10 +4,51 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
+  buildChatRequesterContext,
+  chatReplyLanguageInstruction,
   containsBotMention,
   createRepositorySnapshot,
   isTrustedChatPermission
 } from "../src/chat/processor.js";
+
+test("PR chat receives host-verified requester role context", () => {
+  assert.deepEqual(buildChatRequesterContext({
+    commenterLogin: "maintainer",
+    pullRequestAuthorLogin: "contributor",
+    repositoryPermission: "admin"
+  }), {
+    login: "maintainer",
+    isPullRequestAuthor: false,
+    repositoryPermission: "admin",
+    actorType: "repository_admin"
+  });
+
+  assert.deepEqual(buildChatRequesterContext({
+    commenterLogin: "Contributor",
+    pullRequestAuthorLogin: "contributor",
+    repositoryPermission: "none"
+  }), {
+    login: "Contributor",
+    isPullRequestAuthor: true,
+    repositoryPermission: "none",
+    actorType: "outside_pull_request_author"
+  });
+
+  assert.equal(buildChatRequesterContext({
+    commenterLogin: "visitor",
+    pullRequestAuthorLogin: "contributor",
+    repositoryPermission: "none"
+  }).actorType, "outside_contributor");
+});
+
+test("PR chat replies in the language of the latest user comment", () => {
+  assert.match(chatReplyLanguageInstruction("@bot Introduce it"), /^Reply in English\./);
+  assert.match(chatReplyLanguageInstruction("@bot 请介绍一下这个 PR"), /^Reply in Chinese\./);
+  assert.match(
+    chatReplyLanguageInstruction("@bot 请 review this PR"),
+    /^Reply in Chinese\./
+  );
+});
 
 test("PR chat recognizes @bot and the configured bot login", () => {
   assert.equal(containsBotMention("@bot can this merge?", "github-actions[bot]"), true);
