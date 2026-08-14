@@ -38,7 +38,9 @@ export async function writeKnowledgeScratch(snapshot: string, content: string): 
   validateRepositoryKnowledge(content);
   const target = path.join(snapshot, REPOSITORY_KNOWLEDGE_SCRATCH_PATH);
   await fs.mkdir(path.dirname(target), { recursive: true });
+  await fs.chmod(path.dirname(target), 0o777);
   await fs.writeFile(target, normalizeKnowledge(content), "utf8");
+  await fs.chmod(target, 0o666);
 }
 
 export async function readKnowledgeScratch(snapshot: string): Promise<string> {

@@ -345,9 +345,26 @@ export async function createRepositorySnapshot(sourceWorktree: string): Promise<
         return !(await fs.lstat(source)).isSymbolicLink();
       }
     });
+    await makeSnapshotWritableForContainer(snapshot);
     return snapshot;
   } catch (error) {
     await fs.rm(snapshot, { recursive: true, force: true });
     throw error;
   }
+}
+
+async function makeSnapshotWritableForContainer(directory: string): Promise<void> {
+  await fs.chmod(directory, 0o777);
+  const entries = await fs.readdir(directory, { withFileTypes: true });
+  await Promise.all(entries.map(async (entry) => {
+    const target = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      await makeSnapshotWritableForContainer(target);
+      return;
+    }
+    if (entry.isFile()) {
+      const stat = await fs.stat(target);
+      await fs.chmod(target, stat.mode & 0o111 ? 0o777 : 0o666);
+    }
+  }));
 }

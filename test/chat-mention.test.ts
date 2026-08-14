@@ -81,6 +81,7 @@ test("PR chat snapshot excludes repository instructions, secrets, git data, and 
     await fs.mkdir(path.join(source, ".agents"));
     await fs.mkdir(path.join(source, ".ghbot"));
     await fs.mkdir(path.join(source, "src"));
+    await fs.mkdir(path.join(source, "scripts"));
     await Promise.all([
       fs.writeFile(path.join(source, ".git", "config"), "credential data"),
       fs.writeFile(path.join(source, ".goose", "config.yaml"), "untrusted goose config"),
@@ -93,11 +94,16 @@ test("PR chat snapshot excludes repository instructions, secrets, git data, and 
       fs.writeFile(path.join(source, "opencode.json"), "{}"),
       fs.writeFile(path.join(source, ".goosehints"), "untrusted hints"),
       fs.writeFile(path.join(source, "src", "index.ts"), "export const safe = true;\n"),
+      fs.writeFile(path.join(source, "scripts", "check.sh"), "#!/bin/sh\nexit 0\n", { mode: 0o755 }),
       fs.symlink(path.join(source, ".env"), path.join(source, "secret-link"))
     ]);
 
     snapshot = await createRepositorySnapshot(source);
     assert.equal(await fs.readFile(path.join(snapshot, "src", "index.ts"), "utf8"), "export const safe = true;\n");
+    assert.equal((await fs.stat(snapshot)).mode & 0o777, 0o777);
+    assert.equal((await fs.stat(path.join(snapshot, "src"))).mode & 0o777, 0o777);
+    assert.equal((await fs.stat(path.join(snapshot, "src", "index.ts"))).mode & 0o777, 0o666);
+    assert.equal((await fs.stat(path.join(snapshot, "scripts", "check.sh"))).mode & 0o777, 0o777);
     for (const excluded of [
       ".git",
       ".goose",
