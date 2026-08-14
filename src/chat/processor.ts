@@ -356,15 +356,15 @@ export async function createRepositorySnapshot(sourceWorktree: string): Promise<
 async function makeSnapshotWritableForContainer(directory: string): Promise<void> {
   await fs.chmod(directory, 0o777);
   const entries = await fs.readdir(directory, { withFileTypes: true });
-  await Promise.all(entries.map(async (entry) => {
+  for (const entry of entries) {
     const target = path.join(directory, entry.name);
     if (entry.isDirectory()) {
       await makeSnapshotWritableForContainer(target);
-      return;
+      continue;
     }
     if (entry.isFile()) {
       const stat = await fs.stat(target);
-      await fs.chmod(target, stat.mode & 0o111 ? 0o777 : 0o666);
+      await fs.chmod(target, (stat.mode & 0o111) !== 0 ? 0o777 : 0o666);
     }
-  }));
+  }
 }
