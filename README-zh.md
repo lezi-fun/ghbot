@@ -76,6 +76,8 @@ Agent 只能编辑临时快照中的 `.ghbot/repository-knowledge.md` 草稿。g
 - 对可能或高度可能的重复项评论候选链接和原因
 - 仅在置信度为 `likely` 时添加 duplicate 标签
 
+PR 重复检测分成两个阶段：先根据标题和正文粗筛最多 3 个候选，再读取目标 PR 与候选 PR 最近的 commits、conversation comments、review summaries 和 inline review comments 做细查。只有细查结束后才会反馈重复结论。Issue 重复检测仍保持单阶段。
+
 机器人不会自动关闭重复项。重复评论带有隐藏 marker，同一次候选不会在 workflow 重跑时重复发布。人工添加且不属于机器人管理范围的标签会被保留。缺失的配置标签会自动创建。
 
 相关变量：

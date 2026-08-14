@@ -74,6 +74,8 @@ On `issues` and `pull_request_target` open/edit/reopen events, ghbot can:
 - comment with a possible or likely duplicate and a link to the earlier item
 - add the duplicate label only for a high-confidence (`likely`) match
 
+PR duplicate detection runs in two stages: a coarse title/body pass selects at most three plausible candidates, then a detailed pass compares the target and candidates using their recent commits, conversation comments, review summaries, and inline review comments. A duplicate is reported only after the detailed pass. Issue duplicate detection remains single-stage.
+
 The bot does not automatically close duplicates. Duplicate comments contain a hidden marker so repeated triage does not post the same candidate twice. Human labels outside the configured managed label set are preserved.
 
 Triage variables:
