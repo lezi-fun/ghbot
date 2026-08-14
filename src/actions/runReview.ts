@@ -162,7 +162,10 @@ async function main(): Promise<void> {
     }
 
     const progress = prPayload.action === "synchronize"
-      ? await beginCommitReviewProgress(octokit, ref)
+      ? await beginCommitReviewProgress(octokit, ref).catch((progressError: unknown) => {
+          logger.warn({ error: progressError, ...ref }, "Failed to publish review start progress; continuing review.");
+          return undefined;
+        })
       : undefined;
     try {
       await processPullRequest(
@@ -171,9 +174,6 @@ async function main(): Promise<void> {
         config.reviewStrictness === "strict" ? "strict" : "normal",
         github.token
       );
-      if (progress) {
-        await finishCommitReviewProgress(octokit, { ...ref, ...progress });
-      }
     } catch (error) {
       if (progress) {
         await finishCommitReviewProgress(octokit, { ...ref, ...progress, failed: true }).catch(
@@ -183,6 +183,13 @@ async function main(): Promise<void> {
         );
       }
       throw error;
+    }
+    if (progress) {
+      await finishCommitReviewProgress(octokit, { ...ref, ...progress }).catch(
+        (progressError: unknown) => {
+          logger.warn({ error: progressError, ...ref }, "Failed to publish review completion progress.");
+        }
+      );
     }
     return;
   }
