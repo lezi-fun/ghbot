@@ -17,7 +17,28 @@ export function formatReviewBody(
     `## Automated review`,
     "",
     `Mode: ${mode}`,
-    "",
+    ""
+  ];
+
+  if (decision.change.length > 0) {
+    lines.push(
+      `### Change request`,
+      "",
+      `${decision.change.length} blocking finding(s) were submitted first as a change request.`,
+      ""
+    );
+  }
+
+  if (decision.review.length > 0) {
+    lines.push(
+      `### Review`,
+      "",
+      `${decision.review.length} non-blocking review note(s) were submitted after the change request.`,
+      ""
+    );
+  }
+
+  lines.push(
     `### Comment`,
     "",
     decision.comment,
@@ -35,11 +56,44 @@ export function formatReviewBody(
     "",
     `Required changes: ${decision.change.length}`,
     `Review notes: ${decision.review.length}`
-  ];
+  );
 
   if (decision.change.length > 0 && !decision.result.shouldClosePullRequest) {
     lines.push("", "After updating the pull request, comment `/recheck` to run the review again.");
   }
+
+  if (unpostedFindings.length > 0) {
+    lines.push("", "Findings that could not be attached inline:");
+    for (const finding of unpostedFindings) {
+      lines.push(
+        "",
+        `- ${finding.path}:${finding.line} [${finding.category}] ${finding.title}`,
+        `  ${finding.body}`
+      );
+    }
+  }
+
+  return lines.join("\n");
+}
+
+export function formatFindingReviewBody(
+  decision: ReviewDecision,
+  category: "review" | "change",
+  unpostedFindings: CategorizedFinding[],
+  mode: ReviewMode,
+  disposition: ReviewDisposition
+): string {
+  const findings = category === "change" ? decision.change : decision.review;
+  const lines = [
+    formatReviewStateMarker(mode, disposition, decision.review.length, decision.change.length),
+    `## ${category === "change" ? "Change request" : "Review"}`,
+    "",
+    category === "change"
+      ? "These blocking findings must be fixed before the pull request can merge."
+      : "These are non-blocking review notes for the pull request author.",
+    "",
+    `Findings: ${findings.length}`
+  ];
 
   if (unpostedFindings.length > 0) {
     lines.push("", "Findings that could not be attached inline:");

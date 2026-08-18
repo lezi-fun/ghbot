@@ -13,7 +13,11 @@ import {
   saveReviewCache
 } from "./cache.js";
 import { GooseReviewer } from "./gooseReviewer.js";
-import { formatReviewBody, type CategorizedFinding } from "./format.js";
+import {
+  formatFindingReviewBody,
+  formatReviewBody,
+  type CategorizedFinding
+} from "./format.js";
 import {
   approvedLoginsForHead,
   evaluateReviewDecision,
@@ -1031,40 +1035,118 @@ async function submitReview(
 ): Promise<void> {
   const validLines = collectValidNewLines(params.files);
   const filesByPath = new Map(params.files.map((file) => [file.filename, file]));
-  const unpostedFindings: CategorizedFinding[] = [];
-  const categorizedFindings: CategorizedFinding[] = [
-    ...params.decision.change.map((finding) => ({ ...finding, category: "change" as const })),
-    ...params.decision.review.map((finding) => ({ ...finding, category: "review" as const }))
-  ];
-
-  const comments = categorizedFindings.flatMap((finding) => {
-    const file = filesByPath.get(finding.path);
-    if (!file) {
-      unpostedFindings.push(finding);
-      return [];
-    }
-
-    const position = toDiffPosition(file, finding.line, validLines);
-    if (!position) {
-      unpostedFindings.push(finding);
-      return [];
-    }
-
-    return [
-      {
-        path: position.path,
-        line: position.line,
-        side: position.side,
-        body: `**${finding.category === "change" ? "Required change" : "Review note"}: ${finding.title}**\n\n${finding.body}`
-      }
-    ];
-  });
-
   const disposition = evaluateReviewDecision(params.decision);
-  const event = disposition.event;
-  const body = formatReviewBody(params.decision, unpostedFindings, params.mode, disposition);
+  const currentReviewIds: number[] = [];
 
-  let currentReviewId: number;
+  for (const phase of buildReviewSubmissionPlan(params.decision, disposition)) {
+    const unpostedFindings: CategorizedFinding[] = [];
+    const comments = phase.findings.flatMap((finding) => {
+      const file = filesByPath.get(finding.path);
+      if (!file) {
+        unpostedFindings.push(finding);
+        return [];
+      }
+
+      const position = toDiffPosition(file, finding.line, validLines);
+      if (!position) {
+        unpostedFindings.push(finding);
+        return [];
+      }
+
+      return [
+        {
+          path: position.path,
+          line: position.line,
+          side: position.side,
+          body: `**${finding.category === "change" ? "Required change" : "Review note"}: ${finding.title}**\n\n${finding.body}`
+        }
+      ];
+    });
+
+    const body = phase.phase === "final"
+      ? formatReviewBody(params.decision, [], params.mode, disposition)
+      : formatFindingReviewBody(params.decision, phase.phase, unpostedFindings, params.mode, disposition);
+    const reviewId = await createGitHubReview(octokit, {
+      owner: params.owner,
+      repo: params.repo,
+      pullNumber: params.pullNumber,
+      commitId: params.commitId,
+      event: phase.event,
+      body,
+      comments,
+      logContext: {
+        owner: params.owner,
+        repo: params.repo,
+        pullNumber: params.pullNumber,
+        commitId: params.commitId
+      }
+    });
+    currentReviewIds.push(reviewId);
+  }
+
+  await supersedePreviousBotReviews(octokit, {
+    owner: params.owner,
+    repo: params.repo,
+    pullNumber: params.pullNumber,
+    currentReviewIds,
+    currentCommitId: params.commitId
+  });
+}
+
+export type ReviewSubmissionPhase = {
+  phase: "change" | "review" | "final";
+  event: "APPROVE" | "COMMENT" | "REQUEST_CHANGES";
+  findings: CategorizedFinding[];
+};
+
+export function buildReviewSubmissionPlan(
+  decision: ReviewDecision,
+  disposition: { event: "APPROVE" | "COMMENT" | "REQUEST_CHANGES" }
+): ReviewSubmissionPhase[] {
+  const phases: ReviewSubmissionPhase[] = [];
+  if (decision.change.length > 0) {
+    phases.push({
+      phase: "change",
+      event: "REQUEST_CHANGES",
+      findings: decision.change.map((finding) => ({ ...finding, category: "change" as const }))
+    });
+  }
+  if (decision.review.length > 0) {
+    phases.push({
+      phase: "review",
+      event: "COMMENT",
+      findings: decision.review.map((finding) => ({ ...finding, category: "review" as const }))
+    });
+  }
+  phases.push({
+    phase: "final",
+    // Once a dedicated REQUEST_CHANGES review has been submitted, the final
+    // summary must stay a comment so GitHub does not group review notes into
+    // the change-request review.
+    event: decision.change.length > 0 ? "COMMENT" : disposition.event,
+    findings: []
+  });
+  return phases;
+}
+
+async function createGitHubReview(
+  octokit: Octokit,
+  params: {
+    owner: string;
+    repo: string;
+    pullNumber: number;
+    commitId: string;
+    event: "APPROVE" | "COMMENT" | "REQUEST_CHANGES";
+    body: string;
+    comments: Array<{
+      path: string;
+      line: number;
+      side: "LEFT" | "RIGHT";
+      body: string;
+    }>;
+    logContext: { owner: string; repo: string; pullNumber: number; commitId: string };
+  }
+): Promise<number> {
   try {
     const response = await withRetry("github.pulls.createReview", async () => {
       return octokit.rest.pulls.createReview({
@@ -1072,25 +1154,19 @@ async function submitReview(
         repo: params.repo,
         pull_number: params.pullNumber,
         commit_id: params.commitId,
-        event,
-        body,
-        comments
+        event: params.event,
+        body: params.body,
+        comments: params.comments
       });
     });
-    currentReviewId = response.data.id;
+    return response.data.id;
   } catch (error) {
-    if (!shouldFallbackToCommentReview(error, event)) {
+    if (!shouldFallbackToCommentReview(error, params.event)) {
       throw error;
     }
 
     logger.warn(
-      {
-        error,
-        owner: params.owner,
-        repo: params.repo,
-        pullNumber: params.pullNumber,
-        commitId: params.commitId
-      },
+      { error, ...params.logContext },
       "Falling back to COMMENT review because the current token is not allowed to approve pull requests."
     );
 
@@ -1101,20 +1177,12 @@ async function submitReview(
         pull_number: params.pullNumber,
         commit_id: params.commitId,
         event: "COMMENT",
-        body,
-        comments
+        body: params.body,
+        comments: params.comments
       });
     });
-    currentReviewId = response.data.id;
+    return response.data.id;
   }
-
-  await supersedePreviousBotReviews(octokit, {
-    owner: params.owner,
-    repo: params.repo,
-    pullNumber: params.pullNumber,
-    currentReviewId,
-    currentCommitId: params.commitId
-  });
 }
 
 async function upsertReviewCheckRun(
@@ -1263,7 +1331,8 @@ export async function supersedePreviousBotReviews(
     owner: string;
     repo: string;
     pullNumber: number;
-    currentReviewId: number;
+    currentReviewId?: number;
+    currentReviewIds?: number[];
     currentCommitId: string;
   }
 ): Promise<void> {
@@ -1274,12 +1343,17 @@ export async function supersedePreviousBotReviews(
     per_page: 100
   });
 
+  const currentReviewIds = new Set([
+    ...(params.currentReviewIds ?? []),
+    ...(params.currentReviewId ? [params.currentReviewId] : [])
+  ]);
+
   for (const review of reviews) {
     if (review.user?.type !== "Bot" || !parseReviewStateMarker(review.body)) {
       continue;
     }
 
-    if (!review.id || review.id === params.currentReviewId) {
+    if (!review.id || currentReviewIds.has(review.id)) {
       continue;
     }
 
@@ -1292,12 +1366,51 @@ export async function supersedePreviousBotReviews(
         review_id: review.id,
         per_page: 100
       });
-      for (const comment of comments) {
+      const commentsWithNodeIds = comments.filter(
+        (comment): comment is typeof comment & { node_id: string } => Boolean(comment.node_id)
+      );
+      const commentsToDelete = new Set(comments.filter((comment) => !comment.node_id).map((comment) => comment.id));
+      if (commentsWithNodeIds.length > 0) {
+        let resolvedCommentNodeIds = new Set<string>();
+        try {
+          resolvedCommentNodeIds = await withRetry(
+            "github.graphql.resolveReviewThread.superseded",
+            async () => resolveReviewThreadsForComments(octokit, {
+              owner: params.owner,
+              repo: params.repo,
+              pullNumber: params.pullNumber,
+              commentNodeIds: commentsWithNodeIds.map((comment) => comment.node_id)
+            })
+          );
+        } catch (error) {
+          logger.warn(
+            {
+              error,
+              owner: params.owner,
+              repo: params.repo,
+              pullNumber: params.pullNumber,
+              reviewId: review.id
+            },
+            "Could not resolve superseded review threads through GraphQL; deleting only the affected inline comments."
+          );
+        }
+
+        // A comment not returned from the thread connection cannot be resolved
+        // by its REST id. Delete only that exceptional remainder so one stale
+        // API response does not leave old inline findings permanently active.
+        for (const comment of commentsWithNodeIds) {
+          if (!resolvedCommentNodeIds.has(comment.node_id)) {
+            commentsToDelete.add(comment.id);
+          }
+        }
+      }
+
+      for (const commentId of commentsToDelete) {
         await withRetry("github.pulls.deleteReviewComment.superseded", async () => {
           return octokit.rest.pulls.deleteReviewComment({
             owner: params.owner,
             repo: params.repo,
-            comment_id: comment.id
+            comment_id: commentId
           });
         });
       }
@@ -1366,8 +1479,89 @@ export function formatSupersededReviewBody(params: {
     "",
     `The review for commit \`${shortSha(params.oldCommitId)}\` has been replaced by the automated review for commit \`${shortSha(params.currentCommitId)}\`.`,
     "",
-    "Its previous inline `review` and `change` comments were removed. Refer to the latest commit review for the current result."
+    "Its previous inline `review` and `change` threads were marked as resolved. Refer to the latest commit review for the current result."
   ].join("\n");
+}
+
+async function resolveReviewThreadsForComments(
+  octokit: Octokit,
+  params: { owner: string; repo: string; pullNumber: number; commentNodeIds: string[] }
+): Promise<Set<string>> {
+  type ReviewThreadsResponse = {
+    repository?: {
+      pullRequest?: {
+        reviewThreads?: {
+          nodes?: Array<{
+            id: string;
+            isResolved: boolean;
+            comments?: { nodes?: Array<{ id: string }> } | null;
+          } | null>;
+          pageInfo: { hasNextPage: boolean; endCursor?: string | null };
+        } | null;
+      } | null;
+    } | null;
+  };
+
+  const targetCommentNodeIds = new Set(params.commentNodeIds);
+  const matchedCommentNodeIds = new Set<string>();
+  let after: string | null = null;
+
+  do {
+    const result: ReviewThreadsResponse = await octokit.graphql<ReviewThreadsResponse>(
+      `query ReviewThreadsForSupersededReview($owner: String!, $repo: String!, $pullNumber: Int!, $after: String) {
+        repository(owner: $owner, name: $repo) {
+          pullRequest(number: $pullNumber) {
+            reviewThreads(first: 100, after: $after) {
+              pageInfo { hasNextPage endCursor }
+              nodes {
+                id
+                isResolved
+                comments(first: 100) {
+                  nodes { id }
+                }
+              }
+            }
+          }
+        }
+      }`,
+      { owner: params.owner, repo: params.repo, pullNumber: params.pullNumber, after }
+    );
+
+    const threads = result.repository?.pullRequest?.reviewThreads;
+    if (!threads) {
+      break;
+    }
+
+    for (const thread of threads.nodes ?? []) {
+      if (!thread) {
+        continue;
+      }
+      const threadCommentNodeIds = (thread.comments?.nodes ?? [])
+        .map((comment) => comment?.id)
+        .filter((commentId): commentId is string => typeof commentId === "string");
+      const matchingCommentNodeIds = threadCommentNodeIds.filter((commentId) => targetCommentNodeIds.has(commentId));
+      if (matchingCommentNodeIds.length === 0) {
+        continue;
+      }
+      for (const commentNodeId of matchingCommentNodeIds) {
+        matchedCommentNodeIds.add(commentNodeId);
+      }
+      if (!thread.isResolved) {
+        await octokit.graphql(
+          `mutation ResolveReviewThread($threadId: ID!) {
+            resolveReviewThread(input: { threadId: $threadId }) {
+              thread { isResolved }
+            }
+          }`,
+          { threadId: thread.id }
+        );
+      }
+    }
+
+    after = threads.pageInfo.hasNextPage ? threads.pageInfo.endCursor ?? null : null;
+  } while (after);
+
+  return matchedCommentNodeIds;
 }
 
 function extractReviewStateMarker(body: string | null | undefined): string {
