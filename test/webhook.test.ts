@@ -5,6 +5,7 @@ import { Readable } from "node:stream";
 import test from "node:test";
 import {
   buildWebhookChatPrompt,
+  getCommenterPermission,
   parseWebhookMentionEvent,
   webhookPermissionAllows
 } from "../src/webhook/processor.js";
@@ -138,11 +139,55 @@ test("Webhook event parsing only accepts supported mentions and preserves PR con
 
 test("Webhook permission policy is explicit", () => {
   assert.equal(webhookPermissionAllows(null, "anyone"), true);
+  assert.equal(webhookPermissionAllows("organization", "read"), true);
+  assert.equal(webhookPermissionAllows("organization", "write"), false);
   assert.equal(webhookPermissionAllows("read", "read"), true);
   assert.equal(webhookPermissionAllows("triage", "read"), true);
   assert.equal(webhookPermissionAllows("read", "write"), false);
   assert.equal(webhookPermissionAllows("write", "write"), true);
   assert.equal(webhookPermissionAllows(null, "read"), false);
+});
+
+test("organization members can use webhook chat without repository collaborator access", async () => {
+  const calls: string[] = [];
+  const octokit = {
+    rest: {
+      repos: {
+        get: async () => {
+          calls.push("repo");
+          return { data: { owner: { type: "Organization" } } };
+        },
+        getCollaboratorPermissionLevel: async () => {
+          calls.push("collaborator");
+          return { data: { permission: null } };
+        }
+      },
+      orgs: {
+        checkMembershipForUser: async () => {
+          calls.push("membership");
+          return { status: 204 };
+        }
+      }
+    }
+  } as any;
+
+  const permission = await getCommenterPermission(octokit, {
+    eventName: "issue_comment",
+    action: "created",
+    deliveryId: "delivery-org-member",
+    installationId: 12345,
+    owner: "acme",
+    repo: "demo",
+    issueNumber: 7,
+    targetKind: "issue",
+    sourceCommentId: 88,
+    commentBody: "@bot help",
+    commenterLogin: "alice",
+    replyMode: "conversation"
+  });
+
+  assert.equal(permission, "organization");
+  assert.deepEqual(calls, ["repo", "membership"]);
 });
 
 test("Webhook server returns health, verifies signatures, queues asynchronously, and deduplicates deliveries", async () => {

@@ -121,7 +121,7 @@ Set these service environment variables:
 - `WEBHOOK_ENABLED=true` to opt in; the default is `false`.
 - `WEBHOOK_SECRET` and optional `WEBHOOK_PATH` (default `/webhooks/github`).
 - `BOT_NAME`: the App login or slug accepted in mentions, for example `forumlify[bot]` accepts both `@forumlify` and `@forumlify[bot]`; `@bot` is always accepted.
-- `WEBHOOK_CHAT_PERMISSION`: `read` (default), `write`, or `anyone`. `read` allows repository collaborators with read, triage, write, maintain, or admin permission; `write` allows write, maintain, or admin; `anyone` skips the commenter permission check but still only works in App-installed repositories.
+- `WEBHOOK_CHAT_PERMISSION`: `read` (default), `write`, or `anyone`. On organization-owned repositories, `read` also allows organization members without adding each member as a repository collaborator; personal repositories and non-members continue through the repository collaborator check. `write` allows write, maintain, or admin; `anyone` skips the commenter permission check but still only works in App-installed repositories. The App should have organization-level `Members: read` permission so private organization membership can be verified.
 - `WEBHOOK_QUEUE_CONCURRENCY` and `WEBHOOK_QUEUE_LIMIT` bound background work and memory.
 
 Start it with `npm run build && npm run webhook`, or build `docker build -f Dockerfile.webhook -t ghbot-webhook .` and run it with the App credentials, webhook secret, and Goose variables. `GET /healthz` is available for service probes. GitHub receives `202` before Goose runs; deliveries are HMAC-verified, deduplicated by `X-GitHub-Delivery`, and failed background deliveries remain retryable.

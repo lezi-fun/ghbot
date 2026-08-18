@@ -185,7 +185,7 @@ export function webhookPermissionAllows(
     return false;
   }
   if (policy === "read") {
-    return ["read", "triage", "write", "maintain", "admin"].includes(permission);
+    return ["organization", "read", "triage", "write", "maintain", "admin"].includes(permission);
   }
   return ["write", "maintain", "admin"].includes(permission);
 }
@@ -369,10 +369,25 @@ async function loadReadme(octokit: Octokit, owner: string, repo: string): Promis
   }
 }
 
-async function getCommenterPermission(octokit: Octokit, mention: WebhookMention): Promise<string | null> {
+export async function getCommenterPermission(octokit: Octokit, mention: WebhookMention): Promise<string | null> {
   if (config.webhookChatPermission === "anyone") {
     return "anyone";
   }
+
+  // An organization-wide App installation should not require every member to
+  // be added as a repository collaborator just to ask the bot a question.
+  // Keep this scoped to read mode; write mode still requires repository write
+  // permission and personal repositories keep the collaborator check below.
+  if (config.webhookChatPermission === "read") {
+    const { data: repository } = await octokit.rest.repos.get({
+      owner: mention.owner,
+      repo: mention.repo
+    });
+    if (repository.owner?.type === "Organization" && await isOrganizationMember(octokit, mention.owner, mention.commenterLogin)) {
+      return "organization";
+    }
+  }
+
   const { data } = await octokit.rest.repos.getCollaboratorPermissionLevel({
     owner: mention.owner,
     repo: mention.repo,
@@ -384,6 +399,22 @@ async function getCommenterPermission(octokit: Octokit, mention: WebhookMention)
     throw error;
   });
   return data.permission ?? null;
+}
+
+async function isOrganizationMember(octokit: Octokit, organization: string, login: string): Promise<boolean> {
+  try {
+    await octokit.rest.orgs.checkMembershipForUser({
+      org: organization,
+      username: login
+    });
+    return true;
+  } catch (error) {
+    // A 404 means the commenter is not a member. A missing Members: read App
+    // permission has the same safe fallback: use repository collaborator
+    // permissions instead of granting organization-wide access.
+    logger.debug({ error, organization, login }, "Webhook commenter is not confirmed as an organization member.");
+    return false;
+  }
 }
 
 async function hasExistingWebhookReply(

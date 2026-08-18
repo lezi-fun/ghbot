@@ -135,7 +135,7 @@ GitHub App 的 Webhook URL 配置为 `https://你的域名/webhooks/github`，`W
 - `WEBHOOK_ENABLED=true` 才启用，默认 `false`。
 - `WEBHOOK_SECRET`，以及可选的 `WEBHOOK_PATH`（默认 `/webhooks/github`）。
 - `BOT_NAME`：App 的 login 或 slug，例如 `forumlify[bot]` 同时接受 `@forumlify` 和 `@forumlify[bot]`；`@bot` 始终接受。
-- `WEBHOOK_CHAT_PERMISSION`：`read`（默认）、`write` 或 `anyone`。`read` 允许具有 read、triage、write、maintain、admin 权限的仓库协作者；`write` 只允许 write、maintain、admin；`anyone` 跳过评论者权限检查，但仍只能访问 App 已安装的仓库。
+- `WEBHOOK_CHAT_PERMISSION`：`read`（默认）、`write` 或 `anyone`。对于组织拥有的仓库，`read` 还会允许组织成员直接提问，不要求把每个成员单独添加为仓库协作者；个人仓库和组织外用户仍走仓库协作者权限检查。`write` 只允许 write、maintain、admin；`anyone` 跳过评论者权限检查，但仍只能访问 App 已安装的仓库。建议给 App 配置组织级 `Members: read`，这样才能验证私有组织成员身份。
 - `WEBHOOK_QUEUE_CONCURRENCY` 和 `WEBHOOK_QUEUE_LIMIT` 用于限制后台处理量和内存。
 
 可以用 `npm run build && npm run webhook` 启动，也可以构建 `docker build -f Dockerfile.webhook -t ghbot-webhook .` 后运行，并传入 App 凭证、Webhook 密钥和 Goose 配置。`GET /healthz` 可作为健康检查。服务会先返回 `202` 再后台调用 Goose；请求使用 HMAC 验签，按 `X-GitHub-Delivery` 去重，后台失败的 delivery 仍可被 GitHub 重试。
