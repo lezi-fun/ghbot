@@ -1479,7 +1479,7 @@ export function formatSupersededReviewBody(params: {
     "",
     `The review for commit \`${shortSha(params.oldCommitId)}\` has been replaced by the automated review for commit \`${shortSha(params.currentCommitId)}\`.`,
     "",
-    "Its previous inline `review` and `change` threads were marked as resolved. Refer to the latest commit review for the current result."
+    "Its previous inline `review` and `change` threads were marked as resolved and hidden. Refer to the latest commit review for the current result."
   ].join("\n");
 }
 
@@ -1543,18 +1543,53 @@ async function resolveReviewThreadsForComments(
       if (matchingCommentNodeIds.length === 0) {
         continue;
       }
+      let threadResolved = thread.isResolved;
+      if (!threadResolved) {
+        try {
+          await withRetry("github.graphql.resolveReviewThread.superseded.item", async () => {
+            return octokit.graphql(
+              `mutation ResolveReviewThread($threadId: ID!) {
+                resolveReviewThread(input: { threadId: $threadId }) {
+                  thread { isResolved }
+                }
+              }`,
+              { threadId: thread.id }
+            );
+          });
+          threadResolved = true;
+        } catch (error) {
+          logger.warn(
+            { error, threadId: thread.id },
+            "Could not resolve a superseded review thread."
+          );
+        }
+      }
+
+      if (!threadResolved) {
+        continue;
+      }
+
       for (const commentNodeId of matchingCommentNodeIds) {
         matchedCommentNodeIds.add(commentNodeId);
-      }
-      if (!thread.isResolved) {
-        await octokit.graphql(
-          `mutation ResolveReviewThread($threadId: ID!) {
-            resolveReviewThread(input: { threadId: $threadId }) {
-              thread { isResolved }
-            }
-          }`,
-          { threadId: thread.id }
-        );
+        try {
+          await withRetry("github.graphql.minimizeResolvedReviewComment.superseded", async () => {
+            return octokit.graphql(
+              `mutation MinimizeSupersededInlineComment($subjectId: ID!) {
+                minimizeComment(input: { subjectId: $subjectId, classifier: RESOLVED }) {
+                  minimizedComment { isMinimized }
+                }
+              }`,
+              { subjectId: commentNodeId }
+            );
+          });
+        } catch (error) {
+          // Resolution succeeded, so keep the comment rather than deleting it
+          // merely because the optional visual minimization failed.
+          logger.warn(
+            { error, commentNodeId },
+            "Could not hide a resolved superseded review comment."
+          );
+        }
       }
     }
 

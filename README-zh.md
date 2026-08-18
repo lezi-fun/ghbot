@@ -46,7 +46,7 @@ goose 的审核结果固定包含四个顶层字段：
 
 新 commit 触发 `synchronize` 后，workflow 会恢复该 PR 最新的缓存。goose 同时收到旧审核结果和当前完整 PR diff，重新验证所有旧问题、移除已经修复的问题，并检查新 commit 引入的回归。旧的合并结论不会在没有新审核的情况下直接复用。
 
-每次 `synchronize` 都会先发布一条绑定当前 commit 的“开始审核”进度评论；审核完成、失败，或因为 PR 再次变化而过期时，会更新同一条评论。新审核成功发布后，ghbot 会把旧机器人审核中的逐行 `review` 和 `change` 线程标记为 resolved，dismiss 仍然生效的旧审核结论，并把旧审核正文压缩为 superseded 占位说明。如果 GitHub 无法通过 GraphQL 暴露某个旧线程，ghbot 才会删除这条无法映射的逐行评论作为降级处理。GitHub 不允许删除已经提交的 review 记录本身，因此最终只有最新审核保留完整正文和有效状态。
+每次 `synchronize` 都会先发布一条绑定当前 commit 的“开始审核”进度评论；审核完成、失败，或因为 PR 再次变化而过期时，会更新同一条评论。新审核成功发布后，ghbot 会把旧机器人审核中的逐行 `review` 和 `change` 线程标记为 resolved，并把这些已解决评论折叠隐藏，dismiss 仍然生效的旧审核结论，并把旧审核正文压缩为 superseded 占位说明。如果 GitHub 无法通过 GraphQL 暴露某个旧线程，ghbot 才会删除这条无法映射的逐行评论作为降级处理。GitHub 不允许删除已经提交的 review 记录本身，因此最终只有最新审核保留完整正文和有效状态。
 
 PR 标题、描述或 base branch 变化触发 `edited` 时也会重新审核。对象按仓库 ID 和 PR 编号隔离；`latest.json` 用于加速下一次审核，`reviews/<head-sha>.json` 留存每个成功审核过的 head。关闭或合并 PR 不会主动删除这些对象。缓存不保存 API key、完整 diff 或 prompt。
 

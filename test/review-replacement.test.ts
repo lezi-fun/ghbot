@@ -47,7 +47,7 @@ test("superseded review body removes old findings and points to the current comm
   assert.match(body, /`aaaaaaaaaaaa`/);
   assert.match(body, /`bbbbbbbbbbbb`/);
   assert.doesNotMatch(body, /Required changes:/);
-  assert.match(body, /inline `review` and `change` threads were marked as resolved/);
+  assert.match(body, /inline `review` and `change` threads were marked as resolved and hidden/);
 });
 
 test("old bot reviews are cleaned only while the current review is preserved", async () => {
@@ -125,9 +125,10 @@ test("old bot reviews are cleaned only while the current review is preserved", a
   assert.ok(pulls.listReviews);
 });
 
-test("superseded inline comments are marked resolved when GitHub exposes review threads", async () => {
+test("superseded inline comments are marked resolved and hidden when GitHub exposes review threads", async () => {
   const deletedComments: number[] = [];
   const resolvedThreads: string[] = [];
+  const hiddenComments: string[] = [];
   const reviews = [
     { id: 10, node_id: "PRR_10", user: { type: "Bot" }, body: marker, state: "CHANGES_REQUESTED", commit_id: "a".repeat(40) },
     { id: 20, node_id: "PRR_20", user: { type: "Bot" }, body: marker, state: "COMMENTED", commit_id: "b".repeat(40) }
@@ -154,7 +155,7 @@ test("superseded inline comments are marked resolved when GitHub exposes review 
         dismissReview: async () => ({ data: {} })
       }
     },
-    graphql: async (query: string, variables: { threadId?: string }) => {
+    graphql: async (query: string, variables: { subjectId?: string; threadId?: string }) => {
       if (query.includes("query ReviewThreadsForSupersededReview")) {
         return {
           repository: {
@@ -181,6 +182,10 @@ test("superseded inline comments are marked resolved when GitHub exposes review 
       if (query.includes("mutation ResolveReviewThread")) {
         resolvedThreads.push(variables.threadId!);
       }
+      if (query.includes("mutation MinimizeSupersededInlineComment")) {
+        assert.match(query, /classifier: RESOLVED/);
+        hiddenComments.push(variables.subjectId!);
+      }
       return { resolveReviewThread: { thread: { isResolved: true } } };
     }
   } as unknown as Octokit;
@@ -196,4 +201,5 @@ test("superseded inline comments are marked resolved when GitHub exposes review 
 
   assert.deepEqual(deletedComments, []);
   assert.deepEqual(resolvedThreads, ["THREAD_PRC_101", "THREAD_PRC_102"]);
+  assert.deepEqual(hiddenComments, ["PRC_101", "PRC_102"]);
 });
