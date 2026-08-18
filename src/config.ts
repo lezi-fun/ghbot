@@ -51,6 +51,12 @@ const configSchema = z.object({
 
     return value;
   }, z.coerce.number().int().positive().optional()),
+  webhookEnabled: envBoolean.default(false),
+  webhookSecret: optionalString,
+  webhookPath: z.string().startsWith("/").default("/webhooks/github"),
+  webhookChatPermission: z.enum(["anyone", "read", "write"]).default("read"),
+  webhookQueueConcurrency: z.coerce.number().int().positive().max(20).default(2),
+  webhookQueueLimit: z.coerce.number().int().positive().max(10_000).default(500),
   gooseModel: optionalString.default("gpt-5.4"),
   gooseThinkingEffort: z.preprocess((value) => {
     if (value === "" || value === undefined) {
@@ -102,6 +108,12 @@ export const config = configSchema.parse({
   githubAppId: process.env.GH_APP_ID ?? process.env.GITHUB_APP_ID,
   githubAppPrivateKey: process.env.GH_APP_PRIVATE_KEY ?? process.env.GITHUB_APP_PRIVATE_KEY,
   githubAppInstallationId: process.env.GH_APP_INSTALLATION_ID ?? process.env.GITHUB_APP_INSTALLATION_ID,
+  webhookEnabled: process.env.WEBHOOK_ENABLED,
+  webhookSecret: process.env.WEBHOOK_SECRET,
+  webhookPath: process.env.WEBHOOK_PATH,
+  webhookChatPermission: process.env.WEBHOOK_CHAT_PERMISSION,
+  webhookQueueConcurrency: process.env.WEBHOOK_QUEUE_CONCURRENCY,
+  webhookQueueLimit: process.env.WEBHOOK_QUEUE_LIMIT,
   gooseModel: process.env.GOOSE_MODEL ?? process.env.OPENCODE_MODEL,
   gooseThinkingEffort:
     process.env.GOOSE_THINKING_EFFORT ?? process.env.OPENCODE_REASONING_EFFORT,

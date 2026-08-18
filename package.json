@@ -9,7 +9,9 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "node --import tsx --test test/**/*.test.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "webhook": "node dist/src/webhook/server.js",
+    "dev:webhook": "tsx src/webhook/server.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.864.0",

@@ -108,6 +108,26 @@ The prompt also receives host-verified requester context: the commenter's login,
 
 When repository knowledge writing is enabled, the Agent may improve its scratch knowledge file only with verified, durable repository facts. Repositories evolve, so it must revise or delete entries that current code, tests, or configuration prove outdated, replaced, contradictory, or no longer true instead of only appending history. Temporary PR conclusions, speculative claims, credentials, personal data, and instructions that weaken security are forbidden. Current repository evidence always takes precedence over cached knowledge.
 
+## Optional GitHub App webhook mode
+
+Action mode remains the default and is complete without a webhook service. `WEBHOOK_ENABLED=false` by default, so existing workflows, review triggers, `/recheck`, `/conflict`, triage, and tool-enabled PR chat continue to use GitHub Actions exactly as before.
+
+Enable webhook mode only when you also run a long-lived Node process or the included `Dockerfile.webhook`. It receives GitHub App webhook events and answers `@bot` mentions in Issue/PR conversation comments, review comments, and submitted reviews. It is useful when the App is installed once for an organization and you want those repositories to share one endpoint. The App must be installed on each repository (or the organization selection must include it); a webhook cannot access repositories where the installation has no access.
+
+Configure the GitHub App webhook URL as `https://your-host/webhooks/github`, use the same value for `WEBHOOK_SECRET`, and subscribe to `Issue comments`, `Pull request review comments`, and `Pull request reviews`. The App needs `Metadata: read`, `Issues: read and write`, and `Pull requests: read and write`. The endpoint exchanges each payload's `installation.id` for the correct short-lived installation token, so one fixed installation ID must not be used for all repositories.
+
+Set these service environment variables:
+
+- `WEBHOOK_ENABLED=true` to opt in; the default is `false`.
+- `WEBHOOK_SECRET` and optional `WEBHOOK_PATH` (default `/webhooks/github`).
+- `BOT_NAME`: the App login or slug accepted in mentions, for example `forumlify[bot]` accepts both `@forumlify` and `@forumlify[bot]`; `@bot` is always accepted.
+- `WEBHOOK_CHAT_PERMISSION`: `read` (default), `write`, or `anyone`. `read` allows repository collaborators with read, triage, write, maintain, or admin permission; `write` allows write, maintain, or admin; `anyone` skips the commenter permission check but still only works in App-installed repositories.
+- `WEBHOOK_QUEUE_CONCURRENCY` and `WEBHOOK_QUEUE_LIMIT` bound background work and memory.
+
+Start it with `npm run build && npm run webhook`, or build `docker build -f Dockerfile.webhook -t ghbot-webhook .` and run it with the App credentials, webhook secret, and Goose variables. `GET /healthz` is available for service probes. GitHub receives `202` before Goose runs; deliveries are HMAC-verified, deduplicated by `X-GitHub-Delivery`, and failed background deliveries remain retryable.
+
+Webhook chat is deliberately read-only: Goose receives repository metadata, README, Issue/PR text, bounded diffs, and recent discussion, but no repository tools or credentials. It cannot edit code, run commands, push commits, run `/recheck`, or run `/conflict`; use Action mode for those operations. Replies follow the language of the latest comment and include no provider or GitHub secrets. Leaving `WEBHOOK_ENABLED` unset preserves the normal Action-only deployment.
+
 ## Automatic conflict resolution
 
 Set `AUTO_RESOLVE_CONFLICTS=true` to allow goose to repair a PR that passed review but GitHub reports as `mergeable=false` with `mergeable_state=dirty`. This is independent of `AUTO_MERGE`; conflict repair can be enabled while automatic merging remains disabled.

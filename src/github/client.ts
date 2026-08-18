@@ -16,11 +16,7 @@ export async function createGitHubCredentials(params?: {
 }): Promise<{ octokit: Octokit; token: string }> {
   if (config.githubAppId && config.githubAppPrivateKey) {
     try {
-      const privateKey = normalizePrivateKey(config.githubAppPrivateKey);
-      const auth = createAppAuth({
-        appId: config.githubAppId,
-        privateKey
-      });
+      const auth = createConfiguredAppAuth();
 
       const installationId =
         config.githubAppInstallationId ??
@@ -63,6 +59,35 @@ export async function createGitHubCredentials(params?: {
     octokit: new Octokit({ auth: config.githubToken }),
     token: config.githubToken
   };
+}
+
+export async function createGitHubAppInstallationCredentials(
+  installationId: number
+): Promise<{ octokit: Octokit; token: string }> {
+  if (!Number.isSafeInteger(installationId) || installationId <= 0) {
+    throw new Error("A valid GitHub App installation id is required.");
+  }
+
+  const auth = createConfiguredAppAuth();
+  const installationAuthentication = await auth({
+    type: "installation",
+    installationId
+  });
+  return {
+    octokit: new Octokit({ auth: installationAuthentication.token }),
+    token: installationAuthentication.token
+  };
+}
+
+function createConfiguredAppAuth(): ReturnType<typeof createAppAuth> {
+  if (!config.githubAppId || !config.githubAppPrivateKey) {
+    throw new Error("GH_APP_ID and GH_APP_PRIVATE_KEY are required for GitHub App authentication.");
+  }
+
+  return createAppAuth({
+    appId: config.githubAppId,
+    privateKey: normalizePrivateKey(config.githubAppPrivateKey)
+  });
 }
 
 function normalizePrivateKey(value: string): string {

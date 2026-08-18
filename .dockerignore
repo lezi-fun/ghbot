@@ -1,0 +1,12 @@
+.git
+.github
+.vercel
+node_modules
+dist
+.env*
+.ghbot-tmp
+.ghbot-cache
+.ghbot-knowledge
+test
+README.md
+README-zh.md

@@ -122,6 +122,26 @@ prompt 还会收到由宿主通过 GitHub 验证的请求者上下文：评论�
 
 启用认知写入后，Agent 只有发现已验证、长期有效的仓库事实时才能更新草稿。仓库会持续变化，因此当前代码、测试或配置证明旧记录已经过时、被替代、互相冲突或不再成立时，必须主动修改或删除旧条目，而不是只追加历史。不得记录临时 PR 结论、推测、凭证、个人信息或降低安全性的指令；当前仓库证据始终优先于缓存认知。
 
+## 可选的 GitHub App Webhook 模式
+
+Action 模式仍然是默认模式，不需要 Webhook 服务也可以完整使用。`WEBHOOK_ENABLED=false` 是默认值，因此现有 workflow、审核触发器、`/recheck`、`/conflict`、Issue/PR 分类和带工具的 PR 对话都会继续完全通过 GitHub Actions 运行。
+
+只有在同时运行长期 Node 进程或本仓库提供的 `Dockerfile.webhook` 时才启用 Webhook。它接收 GitHub App 的 webhook 事件，处理 Issue/PR conversation comment、review comment 和提交的 review 中对 `@bot` 的提问。适合组织只安装一次 App、由多个仓库共用一个服务端点的场景。App 必须安装到每个目标仓库，或者组织安装时选择包含这些仓库；未被该 installation 授权的仓库无法访问。
+
+GitHub App 的 Webhook URL 配置为 `https://你的域名/webhooks/github`，`WEBHOOK_SECRET` 使用同一个密钥，并订阅 `Issue comments`、`Pull request review comments`、`Pull request reviews`。App 需要 `Metadata: read`、`Issues: read and write`、`Pull requests: read and write`。服务会使用每个 payload 中的 `installation.id` 换取对应的短期 installation token，不能用一个固定 installation ID 代替所有仓库。
+
+服务环境变量如下：
+
+- `WEBHOOK_ENABLED=true` 才启用，默认 `false`。
+- `WEBHOOK_SECRET`，以及可选的 `WEBHOOK_PATH`（默认 `/webhooks/github`）。
+- `BOT_NAME`：App 的 login 或 slug，例如 `forumlify[bot]` 同时接受 `@forumlify` 和 `@forumlify[bot]`；`@bot` 始终接受。
+- `WEBHOOK_CHAT_PERMISSION`：`read`（默认）、`write` 或 `anyone`。`read` 允许具有 read、triage、write、maintain、admin 权限的仓库协作者；`write` 只允许 write、maintain、admin；`anyone` 跳过评论者权限检查，但仍只能访问 App 已安装的仓库。
+- `WEBHOOK_QUEUE_CONCURRENCY` 和 `WEBHOOK_QUEUE_LIMIT` 用于限制后台处理量和内存。
+
+可以用 `npm run build && npm run webhook` 启动，也可以构建 `docker build -f Dockerfile.webhook -t ghbot-webhook .` 后运行，并传入 App 凭证、Webhook 密钥和 Goose 配置。`GET /healthz` 可作为健康检查。服务会先返回 `202` 再后台调用 Goose；请求使用 HMAC 验签，按 `X-GitHub-Delivery` 去重，后台失败的 delivery 仍可被 GitHub 重试。
+
+Webhook 对话刻意保持只读：Goose 只能收到仓库元数据、README、Issue/PR 内容、有限 diff 和近期讨论，不会获得仓库工具或凭证。因此它不能改代码、执行命令、push、运行 `/recheck` 或 `/conflict`；这些操作请继续使用 Action 模式。回复语言跟随最新一条评论，也不会暴露 provider 或 GitHub 密钥。不设置 `WEBHOOK_ENABLED` 就仍是普通的 Action-only 部署。
+
 ## 自动解决合并冲突
 
 设置 `AUTO_RESOLVE_CONFLICTS=true` 后，如果 AI 审核已经通过，但 GitHub 报告 `mergeable=false` 且 `mergeable_state=dirty`，goose 可以自动解决冲突。它与 `AUTO_MERGE` 相互独立，因此可以只开启冲突修复而继续禁止自动合并。
