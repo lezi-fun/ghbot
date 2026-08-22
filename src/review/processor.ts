@@ -2,6 +2,7 @@ import type { Octokit } from "@octokit/rest";
 import { config } from "../config.js";
 import { requiredChecksAreGreen } from "../github/checks.js";
 import { postPermissionDeniedComment } from "../github/commandFeedback.js";
+import { formatBotSignature, formatRuntimeEnvironmentDetails } from "../github/runtimeInfo.js";
 import { formatBotDisplayName } from "../github/botIdentity.js";
 import { collectValidNewLines, toDiffPosition } from "../github/diff.js";
 import { logger } from "../logger.js";
@@ -351,8 +352,10 @@ export async function beginCommitReviewProgress(
   const marker = reviewProgressMarker(pullRequest.head.sha);
   const body = [
     marker,
-    `New commit \`${shortSha(pullRequest.head.sha)}\` detected. Automated review has started for this commit.`
-  ].join("\n");
+    `New commit \`${shortSha(pullRequest.head.sha)}\` detected. Automated review has started for this commit.`,
+    formatRuntimeEnvironmentDetails(),
+    formatBotSignature()
+  ].join("\n\n");
   const existing = await findIssueCommentByMarker(octokit, params, marker);
   const response = existing
     ? await withRetry("github.issues.updateComment.reviewProgressStarted", async () => {
@@ -410,7 +413,7 @@ export async function finishCommitReviewProgress(
       owner: params.owner,
       repo: params.repo,
       comment_id: params.commentId,
-      body: [marker, message].join("\n")
+      body: [marker, message, formatRuntimeEnvironmentDetails(), formatBotSignature()].join("\n\n")
     });
   });
 }
@@ -608,7 +611,7 @@ export async function processRecheckComment(
       owner: params.owner,
       repo: params.repo,
       issue_number: params.pullNumber,
-      body: `Recheck requested by @${params.commenterLogin}. Re-running the review with the repository's current strictness settings.`
+      body: `Recheck requested by @${params.commenterLogin}. Re-running the review with the repository's current strictness settings.\n\n${formatRuntimeEnvironmentDetails()}\n\n${formatBotSignature()}`
     });
   });
 

@@ -4,6 +4,7 @@ import type { Octokit } from "@octokit/rest";
 import { runGooseAgent } from "../ai/gooseCli.js";
 import { config } from "../config.js";
 import { postPermissionDeniedComment } from "../github/commandFeedback.js";
+import { formatBotSignature, formatRuntimeEnvironmentDetails } from "../github/runtimeInfo.js";
 import { logger } from "../logger.js";
 import { withRetry } from "../retry.js";
 import { compactFilesForReview } from "../review/prompt.js";
@@ -145,7 +146,7 @@ export async function processPullRequestChat(
       owner: params.owner,
       repo: params.repo,
       issue_number: params.pullNumber,
-      body: `${marker}\n${reply}`
+      body: `${marker}\n${reply}\n\n${formatRuntimeEnvironmentDetails()}\n\n${formatBotSignature()}`
     });
   });
 }

@@ -241,6 +241,7 @@ jobs:
           GOOSE_BASE_URL: ${{ inputs.goose_base_url || inputs.opencode_base_url }}
           GOOSE_MODEL: ${{ inputs.goose_model || inputs.opencode_model }}
           GOOSE_THINKING_EFFORT: ${{ inputs.goose_thinking_effort || inputs.opencode_reasoning_effort }}
+          GOOSE_VERSION: v1.46.0
           REVIEW_POLICY: ${{ inputs.review_policy }}
           REVIEW_STRICTNESS: ${{ inputs.review_strictness }}
           REVIEW_INSTRUCTIONS: ${{ inputs.review_instructions }}
@@ -316,6 +317,7 @@ jobs:
           GOOSE_BASE_URL: ${{ inputs.goose_base_url || inputs.opencode_base_url }}
           GOOSE_MODEL: ${{ inputs.goose_model || inputs.opencode_model }}
           GOOSE_THINKING_EFFORT: ${{ inputs.goose_thinking_effort || inputs.opencode_reasoning_effort }}
+          GOOSE_VERSION: v1.46.0
           REVIEW_POLICY: ${{ inputs.review_policy }}
           REVIEW_STRICTNESS: ${{ inputs.review_strictness }}
           REVIEW_INSTRUCTIONS: ${{ inputs.review_instructions }}

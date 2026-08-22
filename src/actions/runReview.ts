@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { config } from "../config.js";
 import { createGitHubCredentials } from "../github/client.js";
+import { formatBotSignature, formatRuntimeEnvironmentDetails } from "../github/runtimeInfo.js";
 import { logger } from "../logger.js";
 import { withRetry } from "../retry.js";
 import { processPullRequestChat } from "../chat/processor.js";
@@ -161,7 +162,11 @@ async function main(): Promise<void> {
           owner: prPayload.repository.owner.login,
           repo: prPayload.repository.name,
           issue_number: prPayload.pull_request.number,
-          body: "Automated review has started. I am checking this pull request now."
+          body: [
+            "Automated review has started. I am checking this pull request now.",
+            formatRuntimeEnvironmentDetails(),
+            formatBotSignature()
+          ].join("\n\n")
         });
       });
     }
