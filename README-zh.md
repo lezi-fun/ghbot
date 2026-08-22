@@ -46,7 +46,7 @@ goose 的审核结果固定包含四个顶层字段：
 
 新 commit 触发 `synchronize` 后，workflow 会恢复该 PR 最新的缓存。goose 同时收到旧审核结果和当前完整 PR diff，重新验证所有旧问题、移除已经修复的问题，并检查新 commit 引入的回归。旧的合并结论不会在没有新审核的情况下直接复用。
 
-每次 `synchronize` 都会先发布一条绑定当前 commit 的“开始审核”进度评论；审核完成、失败，或因为 PR 再次变化而过期时，会更新同一条评论。新审核成功发布后，ghbot 会把旧机器人审核中的逐行 `review` 和 `change` 线程标记为 resolved，并把这些已解决评论折叠隐藏，dismiss 仍然生效的旧审核结论，并把旧审核正文压缩为 superseded 占位说明。如果 GitHub 无法通过 GraphQL 暴露某个旧线程，ghbot 才会删除这条无法映射的逐行评论作为降级处理。GitHub 不允许删除已经提交的 review 记录本身，因此最终只有最新审核保留完整正文和有效状态。
+每次 `synchronize` 都会先发布一条绑定当前 commit 的“开始审核”进度评论；审核完成、失败，或因为 PR 再次变化而过期时，会更新同一条评论。机器人宣布开始或完成操作的每条评论末尾都带有一个折叠的“运行环境”块（触发事件、运行器、goose 模型、审查策略、自动化开关、缓存状态），以及指回本仓库的 `Created By GHBot` 署名。新审核成功发布后，ghbot 会把旧机器人审核中的逐行 `review` 和 `change` 线程标记为 resolved，并把这些已解决评论折叠隐藏，dismiss 仍然生效的旧审核结论，并把旧审核正文压缩为 superseded 占位说明。如果 GitHub 无法通过 GraphQL 暴露某个旧线程，ghbot 才会删除这条无法映射的逐行评论作为降级处理。GitHub 不允许删除已经提交的 review 记录本身，因此最终只有最新审核保留完整正文和有效状态。
 
 PR 标题、描述或 base branch 变化触发 `edited` 时也会重新审核。对象按仓库 ID 和 PR 编号隔离；`latest.json` 用于加速下一次审核，`reviews/<head-sha>.json` 留存每个成功审核过的 head。关闭或合并 PR 不会主动删除这些对象。缓存不保存 API key、完整 diff 或 prompt。
 
@@ -128,7 +128,7 @@ Action 模式仍然是默认模式，不需要 Webhook 服务也可以完整使�
 
 只有在同时运行长期 Node 进程或本仓库提供的 `Dockerfile.webhook` 时才启用 Webhook。它接收 GitHub App 的 webhook 事件，处理 Issue/PR conversation comment、review comment 和提交的 review 中对 `@bot` 的提问。适合组织只安装一次 App、由多个仓库共用一个服务端点的场景。App 必须安装到每个目标仓库，或者组织安装时选择包含这些仓库；未被该 installation 授权的仓库无法访问。
 
-GitHub App 的 Webhook URL 配置为 `https://你的域名/webhooks/github`，`WEBHOOK_SECRET` 使用同一个密钥，并订阅 `Issue comments`、`Pull request review comments`、`Pull request reviews`。App 需要 `Metadata: read`、`Issues: read and write`、`Pull requests: read and write`。服务会使用每个 payload 中的 `installation.id` 换取对应的短期 installation token，不能用一个固定 installation ID 代替所有仓库。
+GitHub App 的 Webhook URL 配置为 `https://你的域名/webhooks/github`，`WEBHOOK_SECRET` 使用同一个密钥，并订阅 `Issue comments`、`Pull request review comments`、`Pull request reviews`，自动分类还需要 `Issues` 和 `Pull requests` 事件。App 需要 `Metadata: read`、`Issues: read and write`、`Pull requests: read and write`。服务会使用每个 payload 中的 `installation.id` 换取对应的短期 installation token，不能用一个固定 installation ID 代替所有仓库。
 
 服务环境变量如下：
 
@@ -140,7 +140,7 @@ GitHub App 的 Webhook URL 配置为 `https://你的域名/webhooks/github`，`W
 
 可以用 `npm run build && npm run webhook` 启动，也可以构建 `docker build -f Dockerfile.webhook -t ghbot-webhook .` 后运行，并传入 App 凭证、Webhook 密钥和 Goose 配置。`GET /healthz` 可作为健康检查。服务会先返回 `202` 再后台调用 Goose；请求使用 HMAC 验签，按 `X-GitHub-Delivery` 去重，后台失败的 delivery 仍可被 GitHub 重试。
 
-Webhook 对话刻意保持只读：Goose 只能收到仓库元数据、README、Issue/PR 内容、有限 diff 和近期讨论，不会获得仓库工具或凭证。因此它不能改代码、执行命令、push、运行 `/recheck` 或 `/conflict`；这些操作请继续使用 Action 模式。回复语言跟随最新一条评论，也不会暴露 provider 或 GitHub 密钥。不设置 `WEBHOOK_ENABLED` 就仍是普通的 Action-only 部署。
+Webhook 对话刻意保持只读：Goose 只能收到仓库元数据、README、Issue/PR 内容、有限 diff、近期讨论，以及配置 R2 后的仓库知识缓存，不会获得仓库工具或凭证。因此它不能改代码、执行命令、push，也不能执行 `/recheck` 或 `/conflict`——收到精确命令时会回复引导信息，指向 Action 模式。对安装了 App 的仓库，webhook 服务也会在 `opened`、`edited`、`reopened` 事件上运行与 Action 模式相同的 Issue/PR 自动分类（打标签与查重）；设置 `WEBHOOK_TRIAGE_ENABLED=false` 可在 Webhook 模式关闭该功能。Webhook 模式的所有本地写入都保持在当前工作目录内：按仓库隔离的知识缓存位于 `.ghbot-tmp/webhook-knowledge/<仓库 ID>/`。回复语言跟随最新一条评论，也不会暴露 provider 或 GitHub 密钥。不设置 `WEBHOOK_ENABLED` 就仍是普通的 Action-only 部署。
 
 ## 自动解决合并冲突
 

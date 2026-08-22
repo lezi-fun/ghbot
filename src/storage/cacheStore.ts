@@ -164,7 +164,12 @@ async function restoreObject(params: {
   }
   params.validate(content);
   await fs.mkdir(path.dirname(params.target), { recursive: true });
-  await fs.writeFile(params.target, content, { mode: 0o600 });
+  // Write through a temporary file so a concurrent reader (the webhook
+  // service serves several repositories concurrently) never observes a
+  // partially written cache object.
+  const temporaryTarget = `${params.target}.tmp-${process.pid}-${Date.now()}`;
+  await fs.writeFile(temporaryTarget, content, { mode: 0o600 });
+  await fs.rename(temporaryTarget, params.target);
   logger.info({ key: params.key, bytes: content.byteLength }, "Restored persistent cache object from R2.");
 }
 

@@ -10,3 +10,4 @@ pnpm-debug.log*
 .ghbot-tmp/
 .ghbot-cache/
 .ghbot-knowledge/
+.playwright-cli/

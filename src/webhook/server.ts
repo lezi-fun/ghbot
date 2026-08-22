@@ -6,8 +6,10 @@ import { createGitHubAppInstallationCredentials } from "../github/client.js";
 import { logger } from "../logger.js";
 import {
   parseWebhookMentionEvent,
+  parseWebhookTriageEvent,
   processWebhookMention
 } from "./processor.js";
+import { processIssueTriage, processPullRequestTriage } from "../triage/processor.js";
 
 const MAX_WEBHOOK_BODY_BYTES = 2 * 1024 * 1024;
 const DELIVERY_RETENTION_MS = 24 * 60 * 60 * 1000;
@@ -144,12 +146,28 @@ export async function startWebhookServer(): Promise<http.Server> {
 function createDefaultDeliveryHandler(botName: string): WebhookDeliveryHandler {
   return async (eventName, payload, deliveryId) => {
     const mention = parseWebhookMentionEvent(eventName, payload, deliveryId, botName);
-    if (!mention) {
-      logger.debug({ eventName, deliveryId }, "Ignoring GitHub webhook without a supported bot mention.");
+    if (mention) {
+      const { octokit } = await createGitHubAppInstallationCredentials(mention.installationId);
+      await processWebhookMention(octokit, mention);
       return;
     }
-    const { octokit } = await createGitHubAppInstallationCredentials(mention.installationId);
-    await processWebhookMention(octokit, mention);
+
+    // Parity with Action mode: automatic issue/PR triage (labels + duplicate
+    // detection) runs on open/edit/reopen events for App-installed repos.
+    const triage = config.webhookTriageEnabled
+      ? parseWebhookTriageEvent(eventName, payload)
+      : null;
+    if (triage) {
+      const { octokit } = await createGitHubAppInstallationCredentials(triage.installationId);
+      if (triage.kind === "issue") {
+        await processIssueTriage(octokit, { owner: triage.owner, repo: triage.repo, issueNumber: triage.number });
+      } else {
+        await processPullRequestTriage(octokit, { owner: triage.owner, repo: triage.repo, pullNumber: triage.number });
+      }
+      return;
+    }
+
+    logger.debug({ eventName, deliveryId }, "Ignoring GitHub webhook without a supported bot mention or triage event.");
   };
 }
 

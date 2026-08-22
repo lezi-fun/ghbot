@@ -87,6 +87,15 @@ export function normalizeKnowledge(content: string): string {
   return `${content.trim()}\n`;
 }
 
+/**
+ * True when the content is still the initial scaffold that
+ * loadRepositoryKnowledge creates on first read, meaning no real knowledge
+ * has been persisted for this repository yet.
+ */
+export function isUninitializedRepositoryKnowledge(content: string): boolean {
+  return normalizeKnowledge(content) === normalizeKnowledge(EMPTY_KNOWLEDGE);
+}
+
 function isNotFoundError(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 }

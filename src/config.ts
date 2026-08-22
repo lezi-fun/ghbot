@@ -57,6 +57,7 @@ const configSchema = z.object({
   webhookChatPermission: z.enum(["anyone", "read", "write"]).default("read"),
   webhookQueueConcurrency: z.coerce.number().int().positive().max(20).default(2),
   webhookQueueLimit: z.coerce.number().int().positive().max(10_000).default(500),
+  webhookTriageEnabled: envBoolean.default(true),
   gooseModel: optionalString.default("gpt-5.4"),
   gooseThinkingEffort: z.preprocess((value) => {
     if (value === "" || value === undefined) {
@@ -114,6 +115,7 @@ export const config = configSchema.parse({
   webhookChatPermission: process.env.WEBHOOK_CHAT_PERMISSION,
   webhookQueueConcurrency: process.env.WEBHOOK_QUEUE_CONCURRENCY,
   webhookQueueLimit: process.env.WEBHOOK_QUEUE_LIMIT,
+  webhookTriageEnabled: process.env.WEBHOOK_TRIAGE_ENABLED,
   gooseModel: process.env.GOOSE_MODEL ?? process.env.OPENCODE_MODEL,
   gooseThinkingEffort:
     process.env.GOOSE_THINKING_EFFORT ?? process.env.OPENCODE_REASONING_EFFORT,
